@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environments
+.venv/
+venv/
+env/
+.conda/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.so
+*.pyd
+*.dll
+*.lib
+*.exp
+
+# CUDA / extension caches
+*.cu.o
+*.o
+.ninja_deps
+.ninja_log
+build.ninja
+
+# Datasets, checkpoints, outputs
+dataset/
+datasets/
+data/
+outputs/
+output/
+ckpt/
+checkpoints/
+pretrained_dirs/
+real_results/
+syn_results/
+*.pth
+*.pt
+*.pkl
+
+# Project-generated files
+MSDZ/ZoomGS/outcmaes/
+MSDZ/ZoomGS/submodules/**/build/
+MSDZ/ZoomGS/submodules/**/*.egg-info/
+MSDZ/FI/ckpt/
+MSDZ/FI/pretrained_dirs/
