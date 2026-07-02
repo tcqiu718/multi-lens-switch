@@ -1,9 +1,10 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
-export MAX_JOBS="${MAX_JOBS:-8}"
+: "${MAX_JOBS:=8}"
+export MAX_JOBS
 
 python -m pip install --upgrade pip setuptools wheel ninja
 python -m pip install --no-build-isolation -v "$SCRIPT_DIR/submodules/diff-gaussian-rasterization-confidence"
