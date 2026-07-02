@@ -1,58 +1,58 @@
-# MSDZ Usage Guide
+# MSDZ 使用指南
 
-This repository contains two runnable parts:
+本项目包含两个可运行部分：
 
-- `ZoomGS`: train and render dual-camera smooth zoom sequences.
-- `FI`: train and test frame interpolation models on DCSZ data.
+- `ZoomGS`：用于训练并渲染双摄平滑变焦序列。
+- `FI`：用于在 DCSZ 数据上训练和测试帧插值模型。
 
-The code has been adjusted for a Python 3.10 + PyTorch 2.5.x CUDA 12.x environment. This README focuses on installation, data layout, training, testing, and rendering.
+当前代码已适配 Python 3.10 + PyTorch 2.5.x + CUDA 12.x 环境。本 README 只保留安装、数据组织、训练、测试和渲染相关的使用说明。
 
-## 1. Environment
+## 1. 环境配置
 
-Recommended base environment:
+推荐创建基础环境：
 
 ```bash
 conda create -n msdz python=3.10 -y
 conda activate msdz
 ```
 
-Install PyTorch and torchvision with the CUDA wheel that matches your server. For CUDA 12.4:
+根据服务器 CUDA 版本安装对应的 PyTorch 和 torchvision。以 CUDA 12.4 为例：
 
 ```bash
 pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124
 ```
 
-Install the remaining Python packages:
+安装其余 Python 依赖：
 
 ```bash
 pip install lpips timm pyiqa cupy-cuda12x kornia torchtyping PyMCubes \
     opencv-python pillow tqdm scikit-image matplotlib plyfile ninja setuptools wheel
 ```
 
-ZoomGS still requires CUDA extension compilation:
+ZoomGS 仍然需要编译 CUDA 扩展：
 
 ```bash
 cd ZoomGS
 bash install_extensions.sh
 ```
 
-On Windows PowerShell:
+Windows PowerShell 下使用：
 
 ```powershell
 cd ZoomGS
 .\install_extensions.ps1
 ```
 
-The extension installer builds:
+扩展安装脚本会编译：
 
 - `diff_gaussian_rasterization`
 - `simple_knn`
 
-## 2. Data and Checkpoints
+## 2. 数据与权重
 
-Run commands from the `MSDZ` directory unless otherwise noted.
+除特别说明外，以下命令默认从 `MSDZ` 目录执行。
 
-Expected data layout:
+推荐的数据目录结构：
 
 ```text
 MSDZ/
@@ -74,34 +74,34 @@ MSDZ/
     ckpt/
 ```
 
-Download links from the original project:
+原项目提供的下载链接：
 
-- ZoomGS dataset: `https://pan.baidu.com/s/1lKcAs12vDzHODBKBPa3fEw?pwd=tarf`
-- FI dataset: `https://pan.baidu.com/s/1rIaAc2Huprl796qguiB8AQ`, extraction code: `w4zf`
-- FI pretrained models: `https://pan.baidu.com/s/1_bfNrij8HwtwlON32TiCWg?pwd=x66g`, extraction code: `x66g`
-- FI fine-tuned checkpoints: `https://pan.baidu.com/s/1QeuSrRo4E5dIEMNGiJRLiw`, extraction code: `hya8`
+- ZoomGS 数据集：`https://pan.baidu.com/s/1lKcAs12vDzHODBKBPa3fEw?pwd=tarf`
+- FI 数据集：`https://pan.baidu.com/s/1rIaAc2Huprl796qguiB8AQ`，提取码：`w4zf`
+- FI 预训练模型：`https://pan.baidu.com/s/1_bfNrij8HwtwlON32TiCWg?pwd=x66g`，提取码：`x66g`
+- FI 微调权重：`https://pan.baidu.com/s/1QeuSrRo4E5dIEMNGiJRLiw`，提取码：`hya8`
 
-Put FI pretrained models into:
+FI 预训练模型放置到：
 
 ```text
 MSDZ/FI/pretrained_dirs/
 ```
 
-Put FI fine-tuned checkpoints into:
+FI 微调权重放置到：
 
 ```text
 MSDZ/FI/ckpt/
 ```
 
-## 3. ZoomGS Usage
+## 3. ZoomGS 用法
 
-Enter the ZoomGS directory:
+进入 ZoomGS 目录：
 
 ```bash
 cd ZoomGS
 ```
 
-Train the base UW Gaussian model:
+训练基础 UW Gaussian 模型：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python zoomgs_train.py \
@@ -113,7 +113,7 @@ CUDA_VISIBLE_DEVICES=0 python zoomgs_train.py \
     --data_device cuda:0
 ```
 
-Jointly train the UW-to-wide camera transition model:
+联合训练 UW 到广角相机的过渡模型：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python zoomgs_train.py \
@@ -125,7 +125,7 @@ CUDA_VISIBLE_DEVICES=0 python zoomgs_train.py \
     --data_device cuda:0
 ```
 
-Test the trained ZoomGS model:
+测试训练后的 ZoomGS 模型：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python zoomgs_test.py \
@@ -136,7 +136,7 @@ CUDA_VISIBLE_DEVICES=0 python zoomgs_test.py \
     --data_device cuda:0
 ```
 
-Render smooth zoom sequences:
+渲染平滑变焦序列：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python zoomgs_render.py \
@@ -147,7 +147,7 @@ CUDA_VISIBLE_DEVICES=0 python zoomgs_render.py \
     --data_device cuda:0
 ```
 
-Generated ZoomGS outputs are saved under the selected model directory, for example:
+生成的 ZoomGS 输出会保存到所选模型目录下，例如：
 
 ```text
 MSDZ/ZoomGS/ckpt/zoomgs/01/
@@ -156,27 +156,27 @@ MSDZ/ZoomGS/ckpt/zoomgs/01/
   zoom_sequences/
 ```
 
-You can also run the provided script after editing the scene id and GPU id:
+也可以先修改脚本中的场景编号和 GPU 编号，然后运行项目自带脚本：
 
 ```bash
 bash zoomgs_train.sh
 ```
 
-## 4. FI Model Usage
+## 4. FI 模型用法
 
-Enter the FI directory:
+进入 FI 目录：
 
 ```bash
 cd FI
 ```
 
-Supported model names:
+支持的模型名称：
 
 ```text
 EDSC, IFRNet, RIFE, AMT, UPRNet, EMAVFI
 ```
 
-Train one FI model on the synthetic DCSZ dataset with PyTorch 2.x:
+使用 PyTorch 2.x 在合成 DCSZ 数据集上训练一个 FI 模型：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 torchrun \
@@ -190,7 +190,7 @@ CUDA_VISIBLE_DEVICES=0,1 torchrun \
     --world_size 2
 ```
 
-For single-GPU training, use:
+单卡训练可以使用：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 torchrun \
@@ -204,7 +204,7 @@ CUDA_VISIBLE_DEVICES=0 torchrun \
     --world_size 1
 ```
 
-Test on synthetic data:
+在合成数据上测试：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python test_syn.py \
@@ -214,7 +214,7 @@ CUDA_VISIBLE_DEVICES=0 python test_syn.py \
     --save_dir ./syn_results/
 ```
 
-Test on real-world data:
+在真实数据上测试：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python test_real.py \
@@ -224,7 +224,7 @@ CUDA_VISIBLE_DEVICES=0 python test_real.py \
     --save_dir ./real_results/
 ```
 
-To switch FI models, change both `--model` and `--log_dir`, for example:
+切换 FI 模型时，需要同时修改 `--model` 和 `--log_dir`，例如：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python test_real.py \
@@ -233,16 +233,16 @@ CUDA_VISIBLE_DEVICES=0 python test_real.py \
     --dataset_dir ../dataset/DCSZ_dataset/DCSZ_real
 ```
 
-## 5. Notes for the Updated Environment
+## 5. 新环境注意事项
 
-- ZoomGS requires CUDA and compiled extensions. It cannot run as pure Python or CPU-only code.
-- FI models `EDSC` and `UPRNet` use CuPy kernels. With newer CuPy versions, this repository uses `FI/model/cupy_compat.py` to replace the removed `cupy.cuda.compile_with_cache` path.
-- The old `python -m torch.distributed.launch` command is deprecated in PyTorch 2.x. Use `torchrun` for FI training.
-- `--data_device cuda:0` can be changed to another visible CUDA device when running ZoomGS.
+- ZoomGS 需要 CUDA 和已编译的扩展，不能作为纯 Python 或仅 CPU 代码运行。
+- FI 中的 `EDSC` 和 `UPRNet` 会使用 CuPy 内核。对于新版 CuPy，本仓库使用 `FI/model/cupy_compat.py` 替代已移除的 `cupy.cuda.compile_with_cache` 调用路径。
+- PyTorch 2.x 中旧的 `python -m torch.distributed.launch` 已废弃，FI 训练建议使用 `torchrun`。
+- 运行 ZoomGS 时，可以把 `--data_device cuda:0` 改成其他可见 CUDA 设备。
 
-## 6. Common Commands
+## 6. 常用检查命令
 
-Check PyTorch and CUDA:
+检查 PyTorch 和 CUDA：
 
 ```bash
 python - <<'PY'
@@ -253,7 +253,7 @@ print(torch.cuda.is_available())
 PY
 ```
 
-Check CuPy:
+检查 CuPy：
 
 ```bash
 python - <<'PY'
@@ -263,7 +263,7 @@ print(cupy.cuda.runtime.runtimeGetVersion())
 PY
 ```
 
-Check ZoomGS extensions:
+检查 ZoomGS 扩展：
 
 ```bash
 python - <<'PY'
