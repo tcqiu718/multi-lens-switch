@@ -1,143 +1,274 @@
-# DCSZ (ECCV 2024)
-PyTorch implementation of [**Dual-Camera Smooth Zoom on Mobile Phones**](http://arxiv.org/abs/2404.04908.pdf)
+# MSDZ Usage Guide
 
+This repository contains two runnable parts:
 
-[![arXiv](https://img.shields.io/badge/arXiv-2404.04908-b10.svg)](http://arxiv.org/abs/2404.04908.pdf)
-[![Project](https://img.shields.io/badge/Project-Website-orange)](https://dualcamerasmoothzoom.github.io/)
-![visitors](https://visitor-badge.laobi.icu/badge?page_id=ZcsrenlongZ.ZoomGS)
+- `ZoomGS`: train and render dual-camera smooth zoom sequences.
+- `FI`: train and test frame interpolation models on DCSZ data.
 
-## News
-- 🔥 Data for ZoomGS and fine-tuning FI models is now available.  
-- 🔥 Codes and pre-trained models are now available.
+The code has been adjusted for a Python 3.10 + PyTorch 2.5.x CUDA 12.x environment. This README focuses on installation, data layout, training, testing, and rendering.
 
+## 1. Environment
 
+Recommended base environment:
 
-## 1. Abstract
-<p align="center"><img src="./figures/intro.png" width="95%"></p>
-When zooming between dual cameras on a mobile, noticeable jumps in geometric content and image color occur in the preview, inevitably affecting the user's zoom experience. 
-In this work, we introduce a new task, \ie, dual-camera smooth zoom (<strong>DCSZ</strong>) to achieve a smooth zoom preview. 
-The frame interpolation (FI) technique is a potential solution but struggles with ground-truth collection. To address the issue, we suggest a data factory solution where continuous virtual cameras are assembled to generate DCSZ data by rendering  reconstructed 3D models of the scene. 
-In particular, we propose a novel dual-camera smooth zoom Gaussian Splatting (<strong>ZoomGS</strong>), where a camera-specific encoding is introduced to construct a specific 3D model for each virtual camera. With the proposed data factory, we construct a synthetic dataset for DCSZ, and we utilize it to fine-tune FI models. 
-In addition, we collect real-world dual-zoom images without ground-truth for evaluation. 
-Extensive experiments are conducted with multiple FI methods. 
-The results show that the fine-tuned FI models achieve a significant performance improvement over the original ones on DCSZ task. 
+```bash
+conda create -n msdz python=3.10 -y
+conda activate msdz
+```
 
+Install PyTorch and torchvision with the CUDA wheel that matches your server. For CUDA 12.4:
 
+```bash
+pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124
+```
 
-## 2. Method
+Install the remaining Python packages:
 
-<p align="center"><img src="./figures/pipeline.png" width="95%"></p>
+```bash
+pip install lpips timm pyiqa cupy-cuda12x kornia torchtyping PyMCubes \
+    opencv-python pillow tqdm scikit-image matplotlib plyfile ninja setuptools wheel
+```
 
-Overview of the proposed method. (a) Data preparation for data factory. We collect multi-view dual-camera images and calibrate their camera extrinsic and intrinsic parameters. (b) Construction of ZoomGS in data factory. ZoomGS employs a camera transition (CamTrans) module to transform the base (i.e., UW camera) Gaussians to the specific camera Gaussians according to the camera encoding. (c) Data generation from data factory. The virtual (V) camera parameters are constructed by interpolating the dual-camera ones, and are then input into ZoomGS to generate zoom sequences. (d) Fine-tuning a frame interpolation (FI) model with the constructed zoom sequences.
+ZoomGS still requires CUDA extension compilation:
 
-## 3. Prerequisites and Datasets
+```bash
+cd ZoomGS
+bash install_extensions.sh
+```
 
-### 3.1 Prerequisites
-- Python 3.7.13, PyTorch 1.12.1, **cuda-11.8**
-- opencv, numpy, Pillow, timm, tqdm, scikit-image
-- We provide detailed dependencies in [`environment.yml`](environment.yml)
+On Windows PowerShell:
 
-### 3.2 Datasets
-Please download data from Baidu Netdisk (Chinese: 百度网盘).
-- Dataset for zoomGS:  https://pan.baidu.com/s/1lKcAs12vDzHODBKBPa3fEw?pwd=tarf 
-- Dataset for FI: https://pan.baidu.com/s/1rIaAc2Huprl796qguiB8AQ 提取码: w4zf 
+```powershell
+cd ZoomGS
+.\install_extensions.ps1
+```
 
-### 3.3 Pretrained models
-- Pretrained model link: https://pan.baidu.com/s/1_bfNrij8HwtwlON32TiCWg?pwd=x66g 提取码: x66g 
+The extension installer builds:
 
-- Please put the above models into './FI/pretrained_dirs'
+- `diff_gaussian_rasterization`
+- `simple_knn`
 
-- Fretrained model link: https://pan.baidu.com/s/1QeuSrRo4E5dIEMNGiJRLiw 提取码: hya8 
+## 2. Data and Checkpoints
 
-- Please put the above models into './FI/ckpt'
+Run commands from the `MSDZ` directory unless otherwise noted.
 
-## 4. Quick Start for ZoomGS
-- Run [`cd ./ZoomGS`](./ZoomGS)
-- Run [`bash ./zoomgs_train.sh`](./zoomgs_trains.sh)
+Expected data layout:
 
-## 5. Quick Start for Frame Interpolation
-- Run [`cd ./FI`](./FrameInterpolation)
-- Training: run [`bash ./train.sh`](./train.sh)
-- Testing on synthetic data: run [`bash ./test_syn.sh`](./test_syn.sh)
-- Testing on real-world data: run [`bash ./test_real.sh`](./test_real.sh)
+```text
+MSDZ/
+  dataset/
+    ZoomGS_dataset/
+      01/
+      ...
+    DCSZ_dataset/
+      DCSZ_syn/
+      DCSZ_real/
+  FI/
+    pretrained_dirs/
+      EDSC/
+      IFRNet/
+      RIFE/
+      AMT/
+      UPRNet/
+      EMAVFI/
+    ckpt/
+```
 
-## 6. ZoomGS Results
-<table>
+Download links from the original project:
 
-   <colgroup>
-    <col style="width: 33%;">
-    <col style="width: 33%;">
-    <col style="width: 33%;">
-  </colgroup>
+- ZoomGS dataset: `https://pan.baidu.com/s/1lKcAs12vDzHODBKBPa3fEw?pwd=tarf`
+- FI dataset: `https://pan.baidu.com/s/1rIaAc2Huprl796qguiB8AQ`, extraction code: `w4zf`
+- FI pretrained models: `https://pan.baidu.com/s/1_bfNrij8HwtwlON32TiCWg?pwd=x66g`, extraction code: `x66g`
+- FI fine-tuned checkpoints: `https://pan.baidu.com/s/1QeuSrRo4E5dIEMNGiJRLiw`, extraction code: `hya8`
 
-  <tr> 
-     <td>
-          <center>UW Image (x0.6)</center>
-    </td>
-     <td>
-          <center>W Image (x1.0)</center>
-    </td>
-     <td>
-          <center>Dual-Camera Smooth Zoom (x0.6->x1.0)</center>
-    </td>
-  </tr>
-  <tr>
-    <td>
-       <img src="./figures/01/0.png" alt="Image 1" width="500"/>
-    </td>
-    <td>
-      <img src="./figures/01/100.png" alt="Image 2" width="500"/>
-    </td>
-    <td>
-      <img src="./figures/01/gif.apng" alt="Image 3" width="500"/>
-    </td>
-  </tr>
+Put FI pretrained models into:
 
-  <tr>
-    <td>
-       <img src="./figures/64/0.png" alt="Image 1" width="500"/>
-    </td>
-    <td>
-      <img src="./figures/64/100.png" alt="Image 2" width="500"/>
-    </td>
-    <td>
-      <img src="./figures/64/gif.apng" alt="Image 3" width="500"/>
-    </td>
-  </tr>
+```text
+MSDZ/FI/pretrained_dirs/
+```
 
+Put FI fine-tuned checkpoints into:
 
-</table>
+```text
+MSDZ/FI/ckpt/
+```
 
+## 3. ZoomGS Usage
 
-## 7. FI Results
+Enter the ZoomGS directory:
 
-#### 7.1 Quantitative comparisons of FI models on the synthetic dataset and real-world dataset.
-<p align="center"><img src="./figures/psnr_comparison.png" width="95%"></p>
+```bash
+cd ZoomGS
+```
 
-#### 7.2 Visual comparisons on the synthetic dataset.
-<p align="center"><img src="./figures/syn_comparison.png" width="95%"></p>
+Train the base UW Gaussian model:
 
-#### 7.3 Visual comparisons on the real-world dataset.
-<p align="center"><img src="./figures/real_comparison.png" width="95%"></p>
+```bash
+CUDA_VISIBLE_DEVICES=0 python zoomgs_train.py \
+    -s ../dataset/ZoomGS_dataset/01 \
+    -m ./ckpt/zoomgs/01 \
+    --iterations 30000 \
+    --eval \
+    --stage uw_pretrain \
+    --data_device cuda:0
+```
 
+Jointly train the UW-to-wide camera transition model:
 
-## Acknowledgement
+```bash
+CUDA_VISIBLE_DEVICES=0 python zoomgs_train.py \
+    -s ../dataset/ZoomGS_dataset/01 \
+    -m ./ckpt/zoomgs/01 \
+    --iterations 30000 \
+    --eval \
+    --stage uw2wide \
+    --data_device cuda:0
+```
 
-Special thanks to the following awesome projects!
+Test the trained ZoomGS model:
 
-- [Gaussian-Splatting](https://github.com/graphdeco-inria/gaussian-splatting)
-- [FSGS](https://github.com/VITA-Group/FSGS)
-- [BAD-Gaussian](https://github.com/WU-CVGL/BAD-Gaussians)
-- [RIFE](https://github.com/hzwer/ECCV2022-RIFE)
+```bash
+CUDA_VISIBLE_DEVICES=0 python zoomgs_test.py \
+    -s ../dataset/ZoomGS_dataset/01 \
+    -m ./ckpt/zoomgs/01 \
+    --iteration 30000 \
+    --target cx \
+    --data_device cuda:0
+```
 
+Render smooth zoom sequences:
 
-## Citation
-If you make use of our work, please cite our paper.
-```bibtex
-@article{DCSZ,
-  title={Dual-Camera Smooth Zoom on Mobile Phones},
-  author={Wu, Renlong and Zhang, Zhilu and Yang, Yu and Zuo, Wangmeng},
-  journal={ECCV},
-  year={2024}
-}
+```bash
+CUDA_VISIBLE_DEVICES=0 python zoomgs_render.py \
+    -s ../dataset/ZoomGS_dataset/01 \
+    -m ./ckpt/zoomgs/01 \
+    --iteration 30000 \
+    --target cx \
+    --data_device cuda:0
+```
+
+Generated ZoomGS outputs are saved under the selected model directory, for example:
+
+```text
+MSDZ/ZoomGS/ckpt/zoomgs/01/
+  point_cloud/
+  train/
+  zoom_sequences/
+```
+
+You can also run the provided script after editing the scene id and GPU id:
+
+```bash
+bash zoomgs_train.sh
+```
+
+## 4. FI Model Usage
+
+Enter the FI directory:
+
+```bash
+cd FI
+```
+
+Supported model names:
+
+```text
+EDSC, IFRNet, RIFE, AMT, UPRNet, EMAVFI
+```
+
+Train one FI model on the synthetic DCSZ dataset with PyTorch 2.x:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 torchrun \
+    --nproc_per_node=2 \
+    --master_port=29502 \
+    train.py \
+    --model RIFE \
+    --log_dir ./ckpt/RIFE_finetuned \
+    --dataset_dir ../dataset/DCSZ_dataset/DCSZ_syn \
+    --epoch 100 \
+    --world_size 2
+```
+
+For single-GPU training, use:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 torchrun \
+    --nproc_per_node=1 \
+    --master_port=29502 \
+    train.py \
+    --model RIFE \
+    --log_dir ./ckpt/RIFE_finetuned \
+    --dataset_dir ../dataset/DCSZ_dataset/DCSZ_syn \
+    --epoch 100 \
+    --world_size 1
+```
+
+Test on synthetic data:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python test_syn.py \
+    --model RIFE \
+    --log_dir ./ckpt/RIFE_finetuned \
+    --dataset_dir ../dataset/DCSZ_dataset/DCSZ_syn \
+    --save_dir ./syn_results/
+```
+
+Test on real-world data:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python test_real.py \
+    --model RIFE \
+    --log_dir ./ckpt/RIFE_finetuned \
+    --dataset_dir ../dataset/DCSZ_dataset/DCSZ_real \
+    --save_dir ./real_results/
+```
+
+To switch FI models, change both `--model` and `--log_dir`, for example:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python test_real.py \
+    --model UPRNet \
+    --log_dir ./ckpt/UPRNet_finetuned \
+    --dataset_dir ../dataset/DCSZ_dataset/DCSZ_real
+```
+
+## 5. Notes for the Updated Environment
+
+- ZoomGS requires CUDA and compiled extensions. It cannot run as pure Python or CPU-only code.
+- FI models `EDSC` and `UPRNet` use CuPy kernels. With newer CuPy versions, this repository uses `FI/model/cupy_compat.py` to replace the removed `cupy.cuda.compile_with_cache` path.
+- The old `python -m torch.distributed.launch` command is deprecated in PyTorch 2.x. Use `torchrun` for FI training.
+- `--data_device cuda:0` can be changed to another visible CUDA device when running ZoomGS.
+
+## 6. Common Commands
+
+Check PyTorch and CUDA:
+
+```bash
+python - <<'PY'
+import torch
+print(torch.__version__)
+print(torch.version.cuda)
+print(torch.cuda.is_available())
+PY
+```
+
+Check CuPy:
+
+```bash
+python - <<'PY'
+import cupy
+print(cupy.__version__)
+print(cupy.cuda.runtime.runtimeGetVersion())
+PY
+```
+
+Check ZoomGS extensions:
+
+```bash
+python - <<'PY'
+import diff_gaussian_rasterization
+import simple_knn._C
+print("ZoomGS extensions OK")
+PY
 ```
