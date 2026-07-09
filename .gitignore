@@ -50,6 +50,7 @@ syn_results/
 *.pth
 *.pt
 *.pkl
+!MSDZ/ZoomGS/pretrained_models/vgg.pth
 
 # Project-generated files
 MSDZ/ZoomGS/outcmaes/
