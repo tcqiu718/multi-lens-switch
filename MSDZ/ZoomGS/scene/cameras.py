@@ -19,7 +19,8 @@ from utils.compat import resolve_device
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
                  image_name, uid, trans=np.array([0.0, 0.0, 0.0]),
-                 scale=1.0, data_device = "cuda", depth_image = None, mask = None, bounds=None):
+                 scale=1.0, data_device = "cuda", depth_image = None, mask = None,
+                 bounds=None, image_path=None):
         super(Camera, self).__init__()
 
         self.uid = uid
@@ -29,6 +30,7 @@ class Camera(nn.Module):
         self.FoVx = FoVx
         self.FoVy = FoVy
         self.image_name = image_name
+        self.image_path = image_path
         self.depth_image = depth_image
         self.mask = mask
         self.bounds = bounds

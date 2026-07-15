@@ -65,6 +65,7 @@ class WideCamera(nn.Module):
         self.FoVy = camrea.FoVy
 
         self.image_name = camrea.image_name
+        self.image_path = getattr(camrea, "image_path", None)
 
         try:
             self.data_device = resolve_device(camrea.data_device)
@@ -142,7 +143,8 @@ def generate_linear_camera(start_camera, end_camera, N_C, N_I):
         cam = WideCamera(Camera(colmap_id=start_camera.colmap_id, R=spline_poses[kk, :3, :3], T=spline_poses[kk, :3, 3], 
                             FoVx=l_FovX[kk], FoVy=l_FovY[kk], image=start_camera.original_image,
                             gt_alpha_mask=None, image_name=start_camera.image_name, uid=start_camera.uid,
-                            trans=start_camera.trans, scale=start_camera.scale, data_device=start_camera.data_device)
+                            trans=start_camera.trans, scale=start_camera.scale,
+                            data_device=start_camera.data_device, image_path=start_camera.image_path)
         )
         linear_cameras.append(cam)
     linear_cameras.append(end_camera)
@@ -208,6 +210,45 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     f.close()
 
 
+def find_view_by_name(views, image_selector, camera_type):
+    selector_name = image_selector.replace("\\", "/").rsplit("/", 1)[-1]
+    selector_stem = os.path.splitext(selector_name)[0].casefold()
+    matches = [view for view in views if view.image_name.casefold() == selector_stem]
+
+    if not matches:
+        available = ", ".join(view.image_name for view in views)
+        raise ValueError(
+            "Could not find {camera_type} image '{selector}'. Available images: {available}".format(
+                camera_type=camera_type,
+                selector=image_selector,
+                available=available,
+            )
+        )
+    return matches[0]
+
+
+def select_render_pair(uw_views, wide_views, args):
+    has_uw_name = bool(args.uw_image.strip())
+    has_wide_name = bool(args.wide_image.strip())
+    if has_uw_name != has_wide_name:
+        raise ValueError("--uw_image and --wide_image must be specified together.")
+
+    if has_uw_name:
+        uw_view = find_view_by_name(uw_views, args.uw_image, "UW")
+        wide_view = find_view_by_name(wide_views, args.wide_image, "W")
+        pair_name = "{}_to_{}".format(uw_view.image_name, wide_view.image_name)
+        return uw_view, wide_view, pair_name
+
+    if args.pair_index < 0 or args.pair_index >= min(len(uw_views), len(wide_views)):
+        raise ValueError(
+            "--pair_index {} is out of range; this scene has {} index-paired images.".format(
+                args.pair_index, min(len(uw_views), len(wide_views))
+            )
+        )
+
+    return uw_views[args.pair_index], wide_views[args.pair_index], str(args.pair_index)
+
+
 def render_set_linear(model_path, name, iteration, views, gaussians, pipeline, background, args, refine=None):
     render_path = os.path.join(model_path, name, "zoom_sequences")
 
@@ -219,41 +260,42 @@ def render_set_linear(model_path, name, iteration, views, gaussians, pipeline, b
     for view in views:
         if view.image_name.split('_')[0] == "uw":
             uw_views.append(WideCamera(view))
-        else:
+        elif view.image_name.split('_')[0] == "w":
             wide_views.append(WideCamera(view))
 
-    uw_views = uw_views
-    wide_views = wide_views[0:len(uw_views)]
+    uw_views.sort(key=lambda camera: camera.image_name)
+    wide_views.sort(key=lambda camera: camera.image_name)
+    uw_view, wide_view, pair_name = select_render_pair(uw_views, wide_views, args)
 
-    generate_idxs = [3, 6]
-    for idx, view in enumerate(tqdm(wide_views, desc="Rendering progress")):
-        if idx in generate_idxs:
-            N_C = 160
-            N_I = 32  
-            # To release FI burden, x0.6 ~ 0.85 can be implemented by SR, 0.85 ~ 1.0 can beimplemented by continuous camera transition 
-            # Thus N_C camera encodings are set to 0., and N_I camera encodings are set to (0., 1.)
-            c_views = np.concatenate((np.zeros(N_C), np.linspace(0., 1., N_I)), 0)
-            linear_views = generate_linear_camera(uw_views[idx], view, N_C, N_I)
+    pair_output_path = os.path.abspath(os.path.join(render_path, pair_name))
+    uw_path = os.path.abspath(uw_view.image_path) if uw_view.image_path else uw_view.image_name
+    wide_path = os.path.abspath(wide_view.image_path) if wide_view.image_path else wide_view.image_name
+    tqdm.write(
+        "\n[ZoomGS] Rendering image pair\n"
+        "  UW image : {uw_path}\n"
+        "  W image  : {wide_path}\n"
+        "  Output   : {output_path}".format(
+            uw_path=uw_path,
+            wide_path=wide_path,
+            output_path=pair_output_path,
+        )
+    )
 
-            makedirs(os.path.join(render_path, str(idx)), exist_ok=True)
-            for ii in range(0, len(linear_views)):
-                view = linear_views[ii]
-                c = c_views[ii]
+    N_C = 160
+    N_I = 32
+    # To release FI burden, x0.6 ~ 0.85 can be implemented by SR, 0.85 ~ 1.0 can beimplemented by continuous camera transition
+    # Thus N_C camera encodings are set to 0., and N_I camera encodings are set to (0., 1.)
+    c_views = np.concatenate((np.zeros(N_C), np.linspace(0., 1., N_I)), 0)
+    linear_views = generate_linear_camera(uw_view, wide_view, N_C, N_I)
 
-                rendering = render(view, gaussians, pipeline, background, info={"c":c, "target":args.target})
-                render_image = rendering["render"].clamp(0., 1.).unsqueeze(0)
+    makedirs(pair_output_path, exist_ok=True)
+    for ii in tqdm(range(len(linear_views)), desc="Rendering {}".format(pair_name), unit="frame"):
+        view = linear_views[ii]
+        c = c_views[ii]
 
-                torchvision.utils.save_image(render_image, os.path.join(render_path, str(idx), '%04d.png'%ii))
-
-            linear_views = linear_views[N_C:]
-            c_views = c_views[N_C:]
-            for ii in range(0, len(linear_views)):
-                view = linear_views[ii]
-                c = c_views[ii]
-
-                rendering = render(view, gaussians, pipeline, background, info={"c":c, "target":args.target})
-                render_image = rendering["render"].clamp(0., 1.).unsqueeze(0)
-                torchvision.utils.save_image(render_image, os.path.join(render_path, str(idx),  '%04d.png'%(ii+N_C)))
+        rendering = render(view, gaussians, pipeline, background, info={"c":c, "target":args.target})
+        render_image = rendering["render"].clamp(0., 1.).unsqueeze(0)
+        torchvision.utils.save_image(render_image, os.path.join(pair_output_path, '%04d.png'%ii))
 
 
 
@@ -268,7 +310,8 @@ def render_sets(dataset : ModelParams, pipeline : PipelineParams, args):
         bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device=runtime_device)
 
-        render_set_linear(dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background, args, refine)
+        all_views = scene.getTrainCameras() + scene.getTestCameras()
+        render_set_linear(dataset.model_path, "train", scene.loaded_iter, all_views, gaussians, pipeline, background, args, refine)
 
 
 if __name__ == "__main__":
@@ -281,6 +324,10 @@ if __name__ == "__main__":
     parser.add_argument("--render_depth", action="store_true")
 
     parser.add_argument("--target", default="", type=str)
+    # Set both defaults to fixed image names, for example "uw_001.jpg" and "w_001.jpg".
+    parser.add_argument("--uw_image", default="", type=str)
+    parser.add_argument("--wide_image", default="", type=str)
+    parser.add_argument("--pair_index", default=3, type=int)
     args = get_combined_args(parser)
     print("Rendering " + args.model_path)
 
