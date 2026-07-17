@@ -206,8 +206,20 @@ if __name__ == "__main__":
     )
     parser.add_argument('--epoch', default=100, type=int, help='total target epoch count')
     parser.add_argument('--batch_size', default=1, type=int, help='minibatch size')
-    parser.add_argument('--world_size', default=4, type=int, help='world size')
-    parser.add_argument('--local_rank', default=0, type=int, help='local rank')
+    parser.add_argument(
+        '--world_size',
+        default=int(os.environ.get("WORLD_SIZE", 1)),
+        type=int,
+        help='world size',
+    )
+    parser.add_argument(
+        '--local_rank',
+        '--local-rank',
+        dest='local_rank',
+        default=int(os.environ.get("LOCAL_RANK", 0)),
+        type=int,
+        help='local rank',
+    )
     args = parser.parse_args()
 
     if args.save_every <= 0:
