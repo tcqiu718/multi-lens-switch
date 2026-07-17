@@ -8,6 +8,7 @@ import numpy as np
 import random
 import argparse
 import shutil
+from tqdm import tqdm
 
 from model.FI_models.EDSCVgg import Model as EDSC
 from model.FI_models.IFRNetVgg import Model as IFRNet
@@ -63,6 +64,7 @@ def save_training_checkpoint(model, log_dir, epoch, step, local_rank):
     latest_temp_path = latest_path + ".tmp"
     torch.save(checkpoint, latest_temp_path)
     os.replace(latest_temp_path, latest_path)
+    print("Saved latest training checkpoint to {}".format(latest_path))
 
     completed_epochs = epoch + 1
     if completed_epochs % args.save_every == 0 or completed_epochs == args.epoch:
@@ -133,7 +135,6 @@ def train(model, data_root, log_dir, local_rank, start_epoch=0, step=0):
     sampler = DistributedSampler(dataset)
     train_data = DataLoader(dataset, batch_size=args.batch_size, num_workers=2, pin_memory=True, drop_last=True, sampler=sampler)
     args.step_per_epoch = train_data.__len__()
-    time_stamp = time.time()
     if start_epoch >= args.epoch:
         raise ValueError(
             "Checkpoint already completed {} epochs; --epoch must be greater than {}.".format(
@@ -143,7 +144,17 @@ def train(model, data_root, log_dir, local_rank, start_epoch=0, step=0):
 
     for epoch in range(start_epoch, args.epoch):
         sampler.set_epoch(epoch)
-        for i, data in enumerate(train_data):
+        time_stamp = time.time()
+        progress_bar = tqdm(
+            enumerate(train_data),
+            total=args.step_per_epoch,
+            desc="Epoch {}/{}".format(epoch + 1, args.epoch),
+            disable=local_rank != 0,
+            dynamic_ncols=True,
+            mininterval=0.5,
+            unit="iter",
+        )
+        for i, data in progress_bar:
             data_time_interval = time.time() - time_stamp
             time_stamp = time.time()
             data_gpu, timestep = data
@@ -157,15 +168,33 @@ def train(model, data_root, log_dir, local_rank, start_epoch=0, step=0):
             imgs = data_gpu[:, :6]
             gt = data_gpu[:, 6:9]
             learning_rate = get_learning_rate(step) * args.world_size / 4
-            pred, info = model.update(imgs, gt, timestep=timestep, learning_rate=learning_rate, training=True) # pass timestep if you are training RIFEm
+            _, info = model.update(imgs, gt, timestep=timestep, learning_rate=learning_rate, training=True) # pass timestep if you are training RIFEm
             
             train_time_interval = time.time() - time_stamp
             time_stamp = time.time()
 
             if local_rank == 0:
-                print('epoch:{} {}/{} time:{:.2f}+{:.2f} loss_l1:{:.4e} loss_vgg:{:.4e}'.format(epoch, i, args.step_per_epoch, data_time_interval, train_time_interval, info['loss_l1'],  info['loss_vgg']))
+                loss_l1 = info['loss_l1'].detach().item()
+                loss_vgg = info['loss_vgg'].detach().item()
+                progress_bar.set_postfix(
+                    l1="{:.4e}".format(loss_l1),
+                    vgg="{:.4e}".format(loss_vgg),
+                    lr="{:.2e}".format(learning_rate),
+                    data="{:.2f}s".format(data_time_interval),
+                    train="{:.2f}s".format(train_time_interval),
+                )
             step += 1
-        model.save_model(log_dir, local_rank, suffix=str(epoch)) 
+        completed_epochs = epoch + 1
+        should_archive = completed_epochs % args.save_every == 0 or completed_epochs == args.epoch
+        if should_archive:
+            model.save_model(log_dir, local_rank, suffix=str(epoch))
+            if local_rank == 0:
+                inference_path = os.path.join(log_dir, "{}_flownet.pkl".format(epoch))
+                print(
+                    "[Epoch {}/{}] Saved inference weights to {}".format(
+                        completed_epochs, args.epoch, inference_path
+                    )
+                )
         save_training_checkpoint(model, log_dir, epoch, step, local_rank)
         dist.barrier()
 
