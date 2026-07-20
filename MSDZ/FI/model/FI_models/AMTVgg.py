@@ -17,7 +17,25 @@ from losses.vgg import VGGLoss
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-  
+
+def prepare_timestep(timestep, reference):
+    if torch.is_tensor(timestep):
+        embt = timestep.to(device=reference.device, dtype=reference.dtype)
+    else:
+        embt = torch.tensor(timestep, device=reference.device, dtype=reference.dtype)
+
+    batch_size = reference.shape[0]
+    if embt.numel() == 1:
+        return embt.reshape(1, 1, 1, 1).expand(batch_size, 1, 1, 1)
+    if embt.numel() == batch_size:
+        return embt.reshape(batch_size, 1, 1, 1)
+    raise ValueError(
+        "Expected one timestep or one timestep per sample, got {} values for batch size {}".format(
+            embt.numel(), batch_size
+        )
+    )
+
+
 class Model:
     def __init__(self, local_rank=-1, ):
         self.flownet = AMTModel()  
@@ -90,7 +108,8 @@ class Model:
         for i in range(3):
             scale_list[i] = scale_list[i] * 1.0 / scale
 
-        pred = self.flownet(img0, img1, embt=torch.FloatTensor([timestep]).to(device))
+        embt = prepare_timestep(timestep, img0)
+        pred = self.flownet(img0, img1, embt=embt)
        
         return pred
 
@@ -105,7 +124,8 @@ class Model:
         else:
             self.eval()
 
-        pred = self.flownet(img0, img1, embt=torch.FloatTensor([timestep]).to(device))
+        embt = prepare_timestep(timestep, img0)
+        pred = self.flownet(img0, img1, embt=embt)
 
         loss_l1 = (self.lap(pred, gt)).mean()
         loss_vgg = (self.vgg(pred, gt)).mean()
