@@ -9,6 +9,7 @@ import random
 import argparse
 import shutil
 from tqdm import tqdm
+from torch.utils.tensorboard import SummaryWriter
 
 from model.FI_models.EDSCVgg import Model as EDSC
 from model.FI_models.IFRNetVgg import Model as IFRNet
@@ -130,7 +131,7 @@ def flow2rgb(flow_map_np):
     rgb_map[:, :, 2] += normalized_flow_map[:, :, 1]
     return rgb_map.clip(0, 1)
 
-def train(model, data_root, log_dir, local_rank, start_epoch=0, step=0):
+def train(model, data_root, log_dir, local_rank, start_epoch=0, step=0, writer=None):
     dataset = DZDataset('train', data_root=data_root)
     sampler = DistributedSampler(dataset)
     train_data = DataLoader(dataset, batch_size=args.batch_size, num_workers=2, pin_memory=True, drop_last=True, sampler=sampler)
@@ -145,6 +146,8 @@ def train(model, data_root, log_dir, local_rank, start_epoch=0, step=0):
     for epoch in range(start_epoch, args.epoch):
         sampler.set_epoch(epoch)
         time_stamp = time.time()
+        epoch_loss_l1 = 0.0
+        epoch_loss_vgg = 0.0
         progress_bar = tqdm(
             enumerate(train_data),
             total=args.step_per_epoch,
@@ -176,6 +179,8 @@ def train(model, data_root, log_dir, local_rank, start_epoch=0, step=0):
             if local_rank == 0:
                 loss_l1 = info['loss_l1'].detach().item()
                 loss_vgg = info['loss_vgg'].detach().item()
+                epoch_loss_l1 += loss_l1
+                epoch_loss_vgg += loss_vgg
                 progress_bar.set_postfix(
                     l1="{:.4e}".format(loss_l1),
                     vgg="{:.4e}".format(loss_vgg),
@@ -183,8 +188,23 @@ def train(model, data_root, log_dir, local_rank, start_epoch=0, step=0):
                     data="{:.2f}s".format(data_time_interval),
                     train="{:.2f}s".format(train_time_interval),
                 )
+                if writer is not None and step % args.tensorboard_every == 0:
+                    writer.add_scalar("train/loss_l1", loss_l1, step)
+                    writer.add_scalar("train/loss_vgg", loss_vgg, step)
+                    writer.add_scalar("train/learning_rate", learning_rate, step)
+                    writer.add_scalar("time/data_seconds", data_time_interval, step)
+                    writer.add_scalar("time/train_seconds", train_time_interval, step)
             step += 1
         completed_epochs = epoch + 1
+        if writer is not None:
+            writer.add_scalar(
+                "epoch/loss_l1", epoch_loss_l1 / args.step_per_epoch, step
+            )
+            writer.add_scalar(
+                "epoch/loss_vgg", epoch_loss_vgg / args.step_per_epoch, step
+            )
+            writer.add_scalar("epoch/completed", completed_epochs, step)
+            writer.flush()
         should_archive = completed_epochs % args.save_every == 0 or completed_epochs == args.epoch
         if should_archive:
             model.save_model(log_dir, local_rank, suffix=str(epoch))
@@ -233,6 +253,18 @@ if __name__ == "__main__":
         default=5,
         help="archive a numbered .pth checkpoint every N completed epochs",
     )
+    parser.add_argument(
+        "--tensorboard_dir",
+        type=str,
+        default="",
+        help="TensorBoard event directory; defaults to <log_dir>/tensorboard",
+    )
+    parser.add_argument(
+        "--tensorboard_every",
+        type=int,
+        default=10,
+        help="write iteration metrics every N optimizer steps",
+    )
     parser.add_argument('--epoch', default=100, type=int, help='total target epoch count')
     parser.add_argument('--batch_size', default=1, type=int, help='minibatch size')
     parser.add_argument(
@@ -253,6 +285,8 @@ if __name__ == "__main__":
 
     if args.save_every <= 0:
         parser.error("--save_every must be greater than 0")
+    if args.tensorboard_every <= 0:
+        parser.error("--tensorboard_every must be greater than 0")
 
     torch.distributed.init_process_group(backend="nccl", world_size=args.world_size)
 
@@ -289,5 +323,26 @@ if __name__ == "__main__":
     log_dir = args.log_dir
     os.makedirs(log_dir, exist_ok=True)
     data_root = args.dataset_dir
-    train(model, data_root, log_dir, args.local_rank, start_epoch=start_epoch, step=step)
+    writer = None
+    if args.local_rank == 0:
+        tensorboard_dir = args.tensorboard_dir or os.path.join(log_dir, "tensorboard")
+        writer_options = {"log_dir": tensorboard_dir}
+        if start_epoch > 0:
+            writer_options["purge_step"] = step
+        writer = SummaryWriter(**writer_options)
+        print("TensorBoard events will be saved to {}".format(os.path.abspath(tensorboard_dir)))
+
+    try:
+        train(
+            model,
+            data_root,
+            log_dir,
+            args.local_rank,
+            start_epoch=start_epoch,
+            step=step,
+            writer=writer,
+        )
+    finally:
+        if writer is not None:
+            writer.close()
         

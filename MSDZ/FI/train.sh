@@ -11,6 +11,8 @@ LOG_DIR="${LOG_DIR:-./ckpt/${MODEL}_scratch}"
 EPOCHS="${EPOCHS:-50}"
 BATCH_SIZE="${BATCH_SIZE:-1}"
 SAVE_EVERY="${SAVE_EVERY:-5}"
+TENSORBOARD_EVERY="${TENSORBOARD_EVERY:-10}"
+TENSORBOARD_DIR="${TENSORBOARD_DIR:-}"
 MASTER_PORT="${MASTER_PORT:-29502}"
 SINGLE_GPU="${SINGLE_GPU:-0}"
 MULTI_GPUS="${MULTI_GPUS:-0,1}"
@@ -33,6 +35,8 @@ run_modern() {
         --epoch "$EPOCHS" \
         --batch_size "$BATCH_SIZE" \
         --save_every "$SAVE_EVERY" \
+        --tensorboard_every "$TENSORBOARD_EVERY" \
+        --tensorboard_dir "$TENSORBOARD_DIR" \
         --world_size "$process_count" \
         "$@"
 }
@@ -49,6 +53,8 @@ run_legacy_single() {
         --epoch "$EPOCHS" \
         --batch_size "$BATCH_SIZE" \
         --save_every "$SAVE_EVERY" \
+        --tensorboard_every "$TENSORBOARD_EVERY" \
+        --tensorboard_dir "$TENSORBOARD_DIR" \
         --world_size 1
 }
 
