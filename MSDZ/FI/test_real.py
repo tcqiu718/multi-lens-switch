@@ -63,9 +63,15 @@ if __name__ == '__main__':
     parser.add_argument("--log_dir", type=str, default="./ckpt/RIFE_finetuned", help="log path")
     parser.add_argument("--dataset_dir", type=str, default="../dataset/DCSZ_dataset/DCSZ_real", help="train data path")
     parser.add_argument('--save_dir', type=str, default='./real_results/', help='where to save image results')
+    parser.add_argument('--num_frames', type=int, default=15, help='total output frames including both endpoints')
     args = parser.parse_args()
 
-    args.save_dir = os.path.join(args.log_dir, args.save_dir)
+    if args.num_frames < 3:
+        parser.error('--num_frames must be at least 3')
+
+    args.save_dir = os.path.join(
+        args.log_dir, args.save_dir, "frames_{:04d}".format(args.num_frames)
+    )
     
 
     if args.model == "EDSC":
@@ -107,7 +113,7 @@ if __name__ == '__main__':
         shape = uw_image.shape
 
         start = 1
-        end = 32
+        end = args.num_frames - 1
 
         scale = 0.85  / 0.6  
         I0 = cv2.resize(uw_image, (int(uw_image.shape[1]*scale), int(uw_image.shape[0]*scale)), interpolation=cv2.INTER_CUBIC)
@@ -126,7 +132,7 @@ if __name__ == '__main__':
 
 
         for ii in range(start, end, 1):
-            timestep = ii / 32
+            timestep = ii / end
             
             gif_imgs = [I0, I1]
 
@@ -148,4 +154,3 @@ if __name__ == '__main__':
 
 
     
-

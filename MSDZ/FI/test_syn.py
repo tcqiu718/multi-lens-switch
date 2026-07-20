@@ -63,9 +63,15 @@ if __name__ == '__main__':
     parser.add_argument("--log_dir", type=str, default="./ckpt/RIFE_finetuned", help="log path")
     parser.add_argument("--dataset_dir", type=str, default="../dataset/DCSZ_dataset/DCSZ_syn", help="train data path")
     parser.add_argument('--save_dir', type=str, default='./syn_results/', help='where to save image results')
+    parser.add_argument('--num_frames', type=int, default=15, help='total output frames including both endpoints')
     args = parser.parse_args()
 
-    args.save_dir = os.path.join(args.log_dir, args.save_dir)
+    if args.num_frames < 3:
+        parser.error('--num_frames must be at least 3')
+
+    args.save_dir = os.path.join(
+        args.log_dir, args.save_dir, "frames_{:04d}".format(args.num_frames)
+    )
     
 
     if args.model == "EDSC":
@@ -111,6 +117,16 @@ if __name__ == '__main__':
         lpips_list = []
         files = sorted(glob.glob(os.path.join(os.path.join(data_dir, id), '*.png')), key=lambda f:int(f.split('/')[-1].split('_')[2].split('.')[0]))
         print(os.path.join(data_dir, id), len(files))
+        if args.num_frames > len(files):
+            raise ValueError(
+                "Sequence {} has {} ground-truth frames, fewer than --num_frames {}".format(
+                    id, len(files), args.num_frames
+                )
+            )
+        source_end = len(files) - 1
+        source_indices = np.rint(
+            np.linspace(0, source_end, args.num_frames)
+        ).astype(np.int64)
         uw_image = cv2.imread(files[0])
         wide_image = cv2.imread(files[-1])
         os.makedirs(args.save_dir, exist_ok=True)
@@ -120,7 +136,7 @@ if __name__ == '__main__':
         shape = uw_image.shape
 
         start = 1
-        end = 32
+        end = args.num_frames - 1
 
         scale = 0.85  / 0.6  
         I0 = cv2.resize(uw_image, (int(uw_image.shape[1]*scale), int(uw_image.shape[0]*scale)), interpolation=cv2.INTER_CUBIC)
@@ -138,9 +154,9 @@ if __name__ == '__main__':
         cv2.imwrite(save_path, save_img)
 
 
-        for ii in range(start, end, 1):
-            timestep = ii / 32
-            gt_image = cv2.imread(files[ii])
+        for ii, source_index in enumerate(source_indices[1:-1], start=start):
+            timestep = source_index / source_end
+            gt_image = cv2.imread(files[source_index])
             
             gif_imgs = [I0, I1]
 
@@ -183,4 +199,3 @@ if __name__ == '__main__':
 
 
     
-
