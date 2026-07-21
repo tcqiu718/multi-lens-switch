@@ -24,6 +24,7 @@ from argparse import ArgumentParser
 import glob
 import lpips
 import nriqa
+from media_utils import create_sequence_media
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -64,14 +65,22 @@ if __name__ == '__main__':
     parser.add_argument("--dataset_dir", type=str, default="../dataset/DCSZ_dataset/DCSZ_real", help="train data path")
     parser.add_argument('--save_dir', type=str, default='./real_results/', help='where to save image results')
     parser.add_argument('--num_frames', type=int, default=15, help='total output frames including both endpoints')
+    parser.add_argument('--media_fps', type=float, default=15.0, help='frame rate of the output MP4 and GIF')
+    parser.add_argument('--skip_video', action='store_true', help='do not create an MP4 for each sequence')
+    parser.add_argument('--skip_gif', action='store_true', help='do not create a GIF for each sequence')
     args = parser.parse_args()
 
     if args.num_frames < 3:
         parser.error('--num_frames must be at least 3')
+    if args.media_fps <= 0:
+        parser.error('--media_fps must be greater than 0')
 
+    result_root = os.path.join(args.log_dir, args.save_dir)
     args.save_dir = os.path.join(
-        args.log_dir, args.save_dir, "frames_{:04d}".format(args.num_frames)
+        result_root, "frames_{:04d}".format(args.num_frames)
     )
+    video_save_dir = os.path.join(result_root, "videos")
+    gif_save_dir = os.path.join(result_root, "gifs")
     
 
     if args.model == "EDSC":
@@ -102,6 +111,7 @@ if __name__ == '__main__':
     data_dir = os.path.join(args.dataset_dir, "test")
     ids = os.listdir(data_dir)
     for id in ids:
+        sequence_save_dir = os.path.join(args.save_dir, id)
         files = sorted(glob.glob(os.path.join(os.path.join(data_dir, id), '*.png')), key=lambda f:int(f.split('/')[-1].split('.')[0]))
         print(os.path.join(data_dir, id), len(files))
         uw_image = cv2.imread(files[0])
@@ -121,13 +131,13 @@ if __name__ == '__main__':
 
 
         save_img = I0
-        os.makedirs(os.path.join(args.save_dir, id), exist_ok=True)
-        save_path = osp.join(args.save_dir, id, '{:03d}.png'.format(start - 1))
+        os.makedirs(sequence_save_dir, exist_ok=True)
+        save_path = osp.join(sequence_save_dir, '{:03d}.png'.format(start - 1))
         cv2.imwrite(save_path, save_img)
 
         save_img = I1
-        os.makedirs(os.path.join(args.save_dir, id), exist_ok=True)
-        save_path = osp.join(args.save_dir, id, '{:03d}.png'.format(end))
+        os.makedirs(sequence_save_dir, exist_ok=True)
+        save_path = osp.join(sequence_save_dir, '{:03d}.png'.format(end))
         cv2.imwrite(save_path, save_img)
 
 
@@ -145,8 +155,18 @@ if __name__ == '__main__':
 
             save_img = gif_imgs[1]
 
-            save_path = osp.join(args.save_dir, id, '{:03d}.png'.format(ii))
+            save_path = osp.join(sequence_save_dir, '{:03d}.png'.format(ii))
             cv2.imwrite(save_path, save_img)
+        create_sequence_media(
+            sequence_save_dir,
+            args.num_frames,
+            fps=args.media_fps,
+            save_video=not args.skip_video,
+            save_gif=not args.skip_gif,
+            video_dir=video_save_dir,
+            gif_dir=gif_save_dir,
+            output_name=id,
+        )
     nriqa.main(args.save_dir, 0)
 
 

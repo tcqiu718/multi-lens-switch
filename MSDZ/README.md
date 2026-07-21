@@ -211,7 +211,9 @@ CUDA_VISIBLE_DEVICES=0 python test_syn.py \
     --model RIFE \
     --log_dir ./ckpt/RIFE_finetuned \
     --dataset_dir ../dataset/DCSZ_dataset/DCSZ_syn \
-    --save_dir ./syn_results/
+    --save_dir ./syn_results/ \
+    --num_frames 15 \
+    --media_fps 15
 ```
 
 在真实数据上测试：
@@ -221,8 +223,26 @@ CUDA_VISIBLE_DEVICES=0 python test_real.py \
     --model RIFE \
     --log_dir ./ckpt/RIFE_finetuned \
     --dataset_dir ../dataset/DCSZ_dataset/DCSZ_real \
-    --save_dir ./real_results/
+    --save_dir ./real_results/ \
+    --num_frames 15 \
+    --media_fps 15
 ```
+
+每组测试序列会同时保存编号 PNG、MP4 和 GIF。以真实数据 15 帧输出为例，
+`frames_0015`、`videos` 和 `gifs` 位于同一级目录：
+
+```text
+ckpt/RIFE_finetuned/real_results/
+  frames_0015/<序列名>/
+    000.png
+    ...
+    014.png
+  videos/<序列名>.mp4
+  gifs/<序列名>.gif
+```
+
+`--media_fps` 控制 MP4 和 GIF 的播放帧率。只需要图片时可同时添加
+`--skip_video --skip_gif`；也可以单独使用其中一个参数关闭对应格式。
 
 切换 FI 模型时，需要同时修改 `--model` 和 `--log_dir`，例如：
 
