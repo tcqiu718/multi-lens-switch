@@ -5,6 +5,25 @@ import torch.nn.functional as F
 from model.emavfi.model.warplayer import warp
 from model.emavfi.model.refine import *
 
+
+def prepare_timestep(timestep, reference):
+    if torch.is_tensor(timestep):
+        timestep = timestep.to(device=reference.device, dtype=reference.dtype)
+    else:
+        timestep = reference.new_tensor(timestep)
+
+    batch_size = reference.shape[0]
+    if timestep.numel() == 1:
+        return timestep.reshape(1, 1, 1, 1).expand(batch_size, 1, 1, 1)
+    if timestep.numel() == batch_size:
+        return timestep.reshape(batch_size, 1, 1, 1)
+    raise ValueError(
+        "Expected one timestep or one timestep per sample, got {} values for batch size {}".format(
+            timestep.numel(), batch_size
+        )
+    )
+
+
 def conv(in_planes, out_planes, kernel_size=3, stride=1, padding=1, dilation=1):
     return nn.Sequential(
         nn.Conv2d(in_planes, out_planes, kernel_size=kernel_size, stride=stride,
@@ -71,8 +90,8 @@ class MultiScaleFlow(nn.Module):
         # appearence_features & motion_features
         if (af is None) or (mf is None):
             af, mf = self.feature_bone(img0, img1)
+        t = prepare_timestep(timestep, imgs)
         for i in range(self.flow_num_stage):
-            t = torch.full(mf[-1-i][:B].shape, timestep, dtype=torch.float).cuda()
             if flow != None:
                 warped_img0 = warp(img0, flow[:, :2])
                 warped_img1 = warp(img1, flow[:, 2:4])
@@ -117,10 +136,10 @@ class MultiScaleFlow(nn.Module):
         flow = None
         # appearence_features & motion_features
         af, mf = self.feature_bone(img0, img1)
+        t = prepare_timestep(timestep, x)
         for i in range(self.flow_num_stage):
-            t = torch.full(mf[-1-i][:B].shape, timestep, dtype=torch.float).cuda()
             if flow != None:
-                flow_d, mask_d = self.block[i]( torch.cat([t*mf[-1-i][:B], (1-timestep)*mf[-1-i][B:],af[-1-i][:B],af[-1-i][B:]],1), 
+                flow_d, mask_d = self.block[i]( torch.cat([t*mf[-1-i][:B], (1-t)*mf[-1-i][B:],af[-1-i][:B],af[-1-i][B:]],1),
                                                 torch.cat((img0, img1, warped_img0, warped_img1, mask), 1), flow)
                 flow = flow + flow_d
                 mask = mask + mask_d

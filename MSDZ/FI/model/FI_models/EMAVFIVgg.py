@@ -115,7 +115,9 @@ class Model:
         else:
             self.eval()
 
-        flow, mask, merged, pred = self.flownet(torch.cat((img0, img1), 1), timestep=timestep.item())
+        flow, mask, merged, pred = self.flownet(
+            torch.cat((img0, img1), 1), timestep=timestep
+        )
 
         loss_l1 = (self.lap(pred, gt)).mean()
         loss_vgg = (self.vgg(pred, gt)).mean()
