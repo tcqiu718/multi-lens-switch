@@ -10,6 +10,7 @@ DATASET_DIR="${DATASET_DIR:-../dataset/DCSZ_dataset/DCSZ_syn}"
 LOG_DIR="${LOG_DIR:-./ckpt/${MODEL}_scratch}"
 EPOCHS="${EPOCHS:-50}"
 BATCH_SIZE="${BATCH_SIZE:-1}"
+NUM_WORKERS="${NUM_WORKERS:-2}"
 SAVE_EVERY="${SAVE_EVERY:-5}"
 TENSORBOARD_EVERY="${TENSORBOARD_EVERY:-10}"
 TENSORBOARD_DIR="${TENSORBOARD_DIR:-}"
@@ -34,6 +35,7 @@ run_modern() {
         --log_dir "$LOG_DIR" \
         --epoch "$EPOCHS" \
         --batch_size "$BATCH_SIZE" \
+        --num_workers "$NUM_WORKERS" \
         --save_every "$SAVE_EVERY" \
         --tensorboard_every "$TENSORBOARD_EVERY" \
         --tensorboard_dir "$TENSORBOARD_DIR" \
@@ -52,6 +54,7 @@ run_legacy_single() {
         --log_dir "$LOG_DIR" \
         --epoch "$EPOCHS" \
         --batch_size "$BATCH_SIZE" \
+        --num_workers "$NUM_WORKERS" \
         --save_every "$SAVE_EVERY" \
         --tensorboard_every "$TENSORBOARD_EVERY" \
         --tensorboard_dir "$TENSORBOARD_DIR" \
@@ -100,7 +103,7 @@ case "$MODE" in
         echo "  legacy-single-scratch Legacy launcher fallback"
         echo ""
         echo "Common overrides:"
-        echo "  DATASET_DIR=/data/fi LOG_DIR=./ckpt/run01 EPOCHS=50 sh train.sh single-scratch"
+        echo "  DATASET_DIR=/data/fi LOG_DIR=./ckpt/run01 EPOCHS=50 NUM_WORKERS=0 sh train.sh single-scratch"
         echo "  RESUME_PATH=./ckpt/run01/checkpoint_epoch_0020.pth sh train.sh single-resume"
         exit 2
         ;;

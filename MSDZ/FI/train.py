@@ -1,5 +1,6 @@
 import os
 import cv2
+import faulthandler
 import math
 import time
 import torch
@@ -23,6 +24,8 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
 from dataset import DZDataset
+
+faulthandler.enable(all_threads=True)
 
 device = torch.device("cuda")
 
@@ -132,10 +135,26 @@ def flow2rgb(flow_map_np):
     return rgb_map.clip(0, 1)
 
 def train(model, data_root, log_dir, local_rank, start_epoch=0, step=0, writer=None):
+    if local_rank == 0:
+        print("Loading training dataset from {}".format(data_root), flush=True)
     dataset = DZDataset('train', data_root=data_root)
     sampler = DistributedSampler(dataset)
-    train_data = DataLoader(dataset, batch_size=args.batch_size, num_workers=2, pin_memory=True, drop_last=True, sampler=sampler)
+    train_data = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        drop_last=True,
+        sampler=sampler,
+    )
     args.step_per_epoch = train_data.__len__()
+    if local_rank == 0:
+        print(
+            "Dataset ready: {} iterations per epoch, {} DataLoader workers".format(
+                args.step_per_epoch, args.num_workers
+            ),
+            flush=True,
+        )
     if start_epoch >= args.epoch:
         raise ValueError(
             "Checkpoint already completed {} epochs; --epoch must be greater than {}.".format(
@@ -268,6 +287,12 @@ if __name__ == "__main__":
     parser.add_argument('--epoch', default=100, type=int, help='total target epoch count')
     parser.add_argument('--batch_size', default=1, type=int, help='minibatch size')
     parser.add_argument(
+        '--num_workers',
+        default=2,
+        type=int,
+        help='number of DataLoader worker processes; use 0 when diagnosing native crashes',
+    )
+    parser.add_argument(
         '--world_size',
         default=int(os.environ.get("WORLD_SIZE", 1)),
         type=int,
@@ -287,6 +312,8 @@ if __name__ == "__main__":
         parser.error("--save_every must be greater than 0")
     if args.tensorboard_every <= 0:
         parser.error("--tensorboard_every must be greater than 0")
+    if args.num_workers < 0:
+        parser.error("--num_workers must be non-negative")
 
     torch.distributed.init_process_group(backend="nccl", world_size=args.world_size)
 
@@ -306,7 +333,11 @@ if __name__ == "__main__":
         "UPRNet": UPRNet,
         "EMAVFI": EMAVFI,
     }
+    if args.local_rank == 0:
+        print("Initializing {} model".format(args.model), flush=True)
     model = model_classes[args.model](args.local_rank)
+    if args.local_rank == 0:
+        print("{} model initialized".format(args.model), flush=True)
 
     start_epoch = 0
     step = 0
