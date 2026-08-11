@@ -1,0 +1,13 @@
+# Install a CUDA-enabled PyTorch build that matches your driver first when needed:
+# https://pytorch.org/get-started/locally/
+torch>=2.1
+torchvision>=0.16
+opencv-python>=4.8
+numpy>=1.23
+Pillow>=9.5
+PyYAML>=6.0
+einops>=0.7
+tqdm>=4.66
+tensorboard>=2.14
+imageio>=2.31
+

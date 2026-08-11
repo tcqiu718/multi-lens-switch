@@ -53,6 +53,53 @@ import torch
 from scene.cameras import Camera
 from utils.loss_utils import l1_loss, ssim
 
+
+def create_video_from_frames(frame_paths, output_path, fps):
+    if fps <= 0:
+        raise ValueError("Video FPS must be greater than 0.")
+    if not frame_paths:
+        raise ValueError("No rendered frames were provided for video creation.")
+
+    first_frame = cv2.imread(frame_paths[0], cv2.IMREAD_COLOR)
+    if first_frame is None:
+        raise RuntimeError("Failed to read rendered frame: {}".format(frame_paths[0]))
+
+    height, width = first_frame.shape[:2]
+    frame_size = (width, height)
+    makedirs(os.path.dirname(output_path), exist_ok=True)
+    writer = cv2.VideoWriter(
+        output_path,
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        float(fps),
+        frame_size,
+    )
+    if not writer.isOpened():
+        raise RuntimeError(
+            "Failed to create MP4 with the OpenCV mp4v codec: {}".format(output_path)
+        )
+
+    try:
+        for frame_path in tqdm(frame_paths, desc="Encoding video", unit="frame"):
+            frame = cv2.imread(frame_path, cv2.IMREAD_COLOR)
+            if frame is None:
+                raise RuntimeError("Failed to read rendered frame: {}".format(frame_path))
+            if (frame.shape[1], frame.shape[0]) != frame_size:
+                raise ValueError(
+                    "Rendered frame {} has resolution {}, expected {}.".format(
+                        frame_path,
+                        (frame.shape[1], frame.shape[0]),
+                        frame_size,
+                    )
+                )
+            writer.write(frame)
+    finally:
+        writer.release()
+
+    if not os.path.isfile(output_path) or os.path.getsize(output_path) == 0:
+        raise RuntimeError("OpenCV created an empty MP4 file: {}".format(output_path))
+    print("[ZoomGS] Video saved to {}".format(os.path.abspath(output_path)))
+
+
 class WideCamera(nn.Module):
     def __init__(self, camrea):
         super(WideCamera, self).__init__()
@@ -102,6 +149,18 @@ class WideCamera(nn.Module):
         ).transpose(0, 1).to(self.data_device)
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
+
+
+def apply_digital_zoom(camera, source_zoom, target_zoom):
+    zoom_ratio = target_zoom / source_zoom
+    if math.isclose(zoom_ratio, 1.0, rel_tol=1e-9, abs_tol=1e-12):
+        return camera
+
+    camera.FoVx = 2.0 * math.atan(math.tan(float(camera.FoVx) / 2.0) / zoom_ratio)
+    camera.FoVy = 2.0 * math.atan(math.tan(float(camera.FoVy) / 2.0) / zoom_ratio)
+    camera.update()
+    return camera
+
 
 def generate_linear_camera(start_camera, end_camera, N_C, N_I):
     linear_cameras = []
@@ -266,6 +325,7 @@ def render_set_linear(model_path, name, iteration, views, gaussians, pipeline, b
     uw_views.sort(key=lambda camera: camera.image_name)
     wide_views.sort(key=lambda camera: camera.image_name)
     uw_view, wide_view, pair_name = select_render_pair(uw_views, wide_views, args)
+    apply_digital_zoom(uw_view, args.uw_source_zoom, args.uw_target_zoom)
 
     pair_output_path = os.path.abspath(os.path.join(render_path, pair_name))
     uw_path = os.path.abspath(uw_view.image_path) if uw_view.image_path else uw_view.image_name
@@ -274,9 +334,12 @@ def render_set_linear(model_path, name, iteration, views, gaussians, pipeline, b
         "\n[ZoomGS] Rendering image pair\n"
         "  UW image : {uw_path}\n"
         "  W image  : {wide_path}\n"
+        "  UW zoom  : {source_zoom:.3f}x -> {target_zoom:.3f}x\n"
         "  Output   : {output_path}".format(
             uw_path=uw_path,
             wide_path=wide_path,
+            source_zoom=args.uw_source_zoom,
+            target_zoom=args.uw_target_zoom,
             output_path=pair_output_path,
         )
     )
@@ -289,13 +352,20 @@ def render_set_linear(model_path, name, iteration, views, gaussians, pipeline, b
     linear_views = generate_linear_camera(uw_view, wide_view, N_C, N_I)
 
     makedirs(pair_output_path, exist_ok=True)
+    frame_paths = []
     for ii in tqdm(range(len(linear_views)), desc="Rendering {}".format(pair_name), unit="frame"):
         view = linear_views[ii]
         c = c_views[ii]
 
         rendering = render(view, gaussians, pipeline, background, info={"c":c, "target":args.target})
         render_image = rendering["render"].clamp(0., 1.).unsqueeze(0)
-        torchvision.utils.save_image(render_image, os.path.join(pair_output_path, '%04d.png'%ii))
+        frame_path = os.path.join(pair_output_path, '%04d.png'%ii)
+        torchvision.utils.save_image(render_image, frame_path)
+        frame_paths.append(frame_path)
+
+    if not args.skip_video:
+        video_path = os.path.join(render_path, "videos", "{}.mp4".format(pair_name))
+        create_video_from_frames(frame_paths, video_path, args.video_fps)
 
 
 
@@ -328,7 +398,17 @@ if __name__ == "__main__":
     parser.add_argument("--uw_image", default="", type=str)
     parser.add_argument("--wide_image", default="", type=str)
     parser.add_argument("--pair_index", default=3, type=int)
+    parser.add_argument("--uw_source_zoom", default=0.5, type=float)
+    parser.add_argument("--uw_target_zoom", default=0.6, type=float)
+    parser.add_argument("--video_fps", default=30.0, type=float)
+    parser.add_argument("--skip_video", action="store_true")
     args = get_combined_args(parser)
+    if args.uw_source_zoom <= 0:
+        parser.error("--uw_source_zoom must be greater than 0")
+    if args.uw_target_zoom <= 0:
+        parser.error("--uw_target_zoom must be greater than 0")
+    if args.video_fps <= 0:
+        parser.error("--video_fps must be greater than 0")
     print("Rendering " + args.model_path)
 
 

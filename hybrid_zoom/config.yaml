@@ -1,0 +1,83 @@
+seed: 42
+device: cuda
+
+image:
+  height: 512
+  width: 768
+  keep_aspect_ratio: true
+  aspect_mode: letterbox   # letterbox | crop
+  interpolation: bilinear
+  center_crop: false
+  # wide_crop_size: [3024, 4032]  # Native-resolution [H,W] crop; enables crop.
+  crop_gt_with_wide: true
+
+flow:
+  model: raft
+  variant: large
+  weights: default       # Use null for random initialization/offline smoke tests.
+  input_height: 384
+  input_width: 512
+  freeze: true
+  train_mode_when_frozen: false
+
+fusion:
+  base_channels: 32
+  mode: residual         # residual | direct
+  activation: leaky_relu
+  use_rejection_input: false
+
+occlusion:
+  mode: soft             # soft | hard
+  threshold: 1.0
+  temperature: 0.2
+
+rejection:
+  patch_size: 16
+  stride: 8
+  metric: normalized_l1  # normalized_l1 | normalized_l2
+  threshold: 0.25
+  temperature: 0.05
+  eps: 0.000001
+
+blending:
+  smoothing: gaussian    # gaussian | average | none
+  sigma: 2.0
+  kernel_size: 0         # 0 chooses an odd kernel from sigma automatically.
+
+loss:
+  vgg_weight: 1.0
+  contextual_weight: 0.05
+  brightness_weight: 1.0
+  brightness_sigma: 10.0
+  vgg_weights: default   # Use null when pretrained weights are unavailable.
+  offline_fallback: false
+  vgg_layers: [3, 8, 17, 26]
+  contextual_layer: 17
+  contextual_bandwidth: 0.5
+  contextual_max_samples: 1024
+
+data:
+  root: ./dataset
+  train_split: train
+  val_split: val
+  test_split: test
+  augment: true
+
+training:
+  batch_size: 2
+  epochs: 50
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+  num_workers: 4
+  amp: true
+  validate_every: 1
+  save_every: 1
+  output_dir: ./runs/hybrid_zoom
+  resume: null
+  grad_clip_norm: 1.0
+
+testing:
+  checkpoint: null
+  output_dir: ./results
+  batch_size: 1
+  num_workers: 2

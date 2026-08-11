@@ -144,17 +144,32 @@ CUDA_VISIBLE_DEVICES=0 python zoomgs_render.py \
     -m ./ckpt/zoomgs/01 \
     --iteration 30000 \
     --target cx \
+    --uw_source_zoom 0.5 \
+    --uw_target_zoom 0.6 \
+    --video_fps 30 \
     --data_device cuda:0
 ```
 
-生成的 ZoomGS 输出会保存到所选模型目录下，例如：
+渲染开始前会通过调整 UW 相机 FoV，将 0.5 倍视角等效数字变焦到 0.6 倍，
+输出分辨率保持不变，然后再从调整后的 UW 视角生成到 Wide 视角的连续路径。
+`--uw_source_zoom` 和 `--uw_target_zoom` 设为相同值时不会进行这一步变焦。
+
+每对图像渲染完成后会自动将编号 PNG 合成为 MP4。生成的 ZoomGS 输出会保存到
+所选模型目录下，例如：
 
 ```text
 MSDZ/ZoomGS/ckpt/zoomgs/01/
   point_cloud/
-  train/
-  zoom_sequences/
+  train/zoom_sequences/
+    <UW图像名>_to_<Wide图像名>/
+      0000.png
+      ...
+      0191.png
+    videos/
+      <UW图像名>_to_<Wide图像名>.mp4
 ```
+
+`--video_fps` 控制视频帧率；只需要 PNG 时添加 `--skip_video`。
 
 也可以先修改脚本中的场景编号和 GPU 编号，然后运行项目自带脚本：
 
