@@ -1,0 +1,79 @@
+mode: paper_repro
+seed: 7
+device: auto
+
+input:
+  wide: null
+  tele: null
+  reverse_flow: null
+  overlap_mask: null
+  resize: null
+
+output:
+  root: outputs/paper_repro
+  save_debug: true
+  save_numpy_flow: true
+
+flow:
+  model: flowformer
+  fallback: raft
+  cache: true
+  flowformer_repo: third_party/FlowFormer-Official
+  flowformer_checkpoint: checkpoints/things.pth
+  raft_variant: large
+  raft_weights: default
+  raft_input_size: null
+  raft_progress: true
+  precomputed_path: null
+  reverse_precomputed_path: null
+  mixed_precision: false
+
+target_flow:
+  kernel_size: 600
+  foreground_mode: magnitude
+  eps: 1.0e-6
+
+boundary:
+  mode: flow_aware
+  gradient_quantile: 0.90
+  gradient_threshold: null
+  max_extra_distance: 256
+
+view_transition:
+  ratio: 0.01
+
+transform:
+  splat_mode: bilinear
+  fill_mode: background_nearest
+  multi_warp_average: true
+  wide_offset_min: -0.5
+  wide_offset_max: 0.5
+  wide_offset_step: 0.2
+
+occlusion:
+  mode: paper
+  camera_relative_position:
+    x: left
+    y: upper
+  foreground_mode: magnitude
+  rectangle_scale: 1.0
+  max_rectangle: 256
+  max_boundary_points: 20000
+  fb_absolute_threshold: 1.0
+  fb_relative_threshold: 0.05
+  soft_width: 15
+
+tone:
+  mode: paper_rhe
+  block_size: 200
+  stride: 30
+  histogram_bins: 256
+  local_window: 61
+  ema: 0.85
+
+blend:
+  pyramid_levels: 5
+  overlap_soft_width: 100
+
+debug:
+  save_intermediate: true

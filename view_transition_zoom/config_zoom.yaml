@@ -1,0 +1,109 @@
+mode: continuous_zoom
+seed: 7
+device: auto
+
+input:
+  wide: null
+  tele: null
+  wide_video: null
+  tele_video: null
+  resize: null
+
+output:
+  root: outputs/continuous_zoom
+  fps: 30
+  codec: mp4v
+  save_frames: true
+  save_debug: false
+  comparison_video: true
+
+flow:
+  model: flowformer
+  fallback: raft
+  cache: true
+  flowformer_repo: third_party/FlowFormer-Official
+  flowformer_checkpoint: checkpoints/things.pth
+  raft_variant: large
+  raft_weights: default
+  raft_input_size: null
+  raft_progress: true
+  precomputed_path: null
+  reverse_precomputed_path: null
+  mixed_precision: false
+
+target_flow:
+  kernel_size: 600
+  foreground_mode: magnitude
+  eps: 1.0e-6
+
+boundary:
+  mode: flow_aware
+  gradient_quantile: 0.90
+  gradient_threshold: null
+  max_extra_distance: 256
+
+view_transition:
+  ratio: 0.01
+
+transform:
+  splat_mode: bilinear
+  fill_mode: background_nearest
+  multi_warp_average: true
+  wide_offset_min: -0.5
+  wide_offset_max: 0.5
+  wide_offset_step: 0.2
+
+occlusion:
+  mode: fb_consistency
+  camera_relative_position:
+    x: left
+    y: upper
+  foreground_mode: magnitude
+  rectangle_scale: 1.0
+  max_rectangle: 256
+  max_boundary_points: 20000
+  fb_absolute_threshold: 1.0
+  fb_relative_threshold: 0.05
+  soft_width: 15
+
+tone:
+  mode: local_affine_temporal
+  block_size: 200
+  stride: 30
+  histogram_bins: 256
+  local_window: 61
+  ema: 0.85
+
+blend:
+  pyramid_levels: 5
+  overlap_soft_width: 100
+
+camera:
+  wide_zoom: 1.0
+  tele_zoom: 3.0
+
+zoom:
+  start: 1.0
+  end: 3.0
+  frames: 90
+  interpolation: log
+  schedule: smootherstep
+  custom_schedule: null
+  endpoint_mode: tele_endpoint
+  terminal_start: 0.8
+  fov_mode: center_crop
+  wide_intrinsics: null
+  tele_intrinsics: null
+
+temporal:
+  enabled: true
+  delta_smoothing: true
+  mask_smoothing: true
+  tone_smoothing: true
+  ema: 0.82
+  flow_guided: false
+  scene_cut_threshold: 0.22
+
+debug:
+  save_intermediate: false
+  every: 30
