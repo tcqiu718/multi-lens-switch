@@ -1,0 +1,5 @@
+-r requirements-flowformerpp.txt
+attrs>=21
+imageio>=2.9
+matplotlib>=3.3
+tensorboard>=2.4

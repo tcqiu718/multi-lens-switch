@@ -8,19 +8,101 @@ from torch import nn
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models.flow_estimator import FlowEstimator, _TorchvisionRaft, _extract_flow, _extract_flowformer_flow
+from models.flow_estimator import (
+    FlowEstimator,
+    _OfficialFlowFormerPlusPlus,
+    _TorchvisionRaft,
+    _extract_flow,
+    _extract_flowformerpp_flow,
+)
 
 
-class FlowFormerAdapterTest(unittest.TestCase):
+class FlowFormerPlusPlusAdapterTest(unittest.TestCase):
     def test_eval_tuple_selects_full_resolution_first_item(self):
         full = torch.ones(1, 2, 32, 48)
         low = torch.zeros(1, 2, 4, 6)
-        self.assertIs(_extract_flowformer_flow((full, low)), full)
+        self.assertIs(_extract_flowformerpp_flow((full, low)), full)
 
     def test_training_prediction_list_selects_last_iteration(self):
         first = torch.zeros(1, 2, 32, 48)
         final = torch.ones(1, 2, 32, 48)
-        self.assertIs(_extract_flowformer_flow([first, final]), final)
+        self.assertIs(_extract_flowformerpp_flow([first, final]), final)
+
+    def test_preprocessing_padding_and_output_resize(self):
+        fake = _FakeFlowFormerPlusPlus()
+        estimator = object.__new__(_OfficialFlowFormerPlusPlus)
+        nn.Module.__init__(estimator)
+        estimator.model = fake
+        estimator.input_size = (64, 96)
+        estimator.mixed_precision = False
+
+        wide = torch.rand(1, 3, 128, 192)
+        tele = torch.rand_like(wide)
+        flow = estimator(wide, tele)
+
+        self.assertEqual(tuple(fake.inputs[0].shape), (1, 3, 128, 128))
+        self.assertGreaterEqual(float(fake.inputs[0].min()), 0.0)
+        self.assertLessEqual(float(fake.inputs[0].max()), 255.0)
+        self.assertEqual(tuple(flow.shape), (1, 2, 128, 192))
+        self.assertAlmostEqual(float(flow[:, 0].mean()), 2.0, places=5)
+        self.assertAlmostEqual(float(flow[:, 1].mean()), 2.0, places=5)
+
+    def test_single_pass_size_limit_has_actionable_error(self):
+        estimator = object.__new__(_OfficialFlowFormerPlusPlus)
+        nn.Module.__init__(estimator)
+        estimator.model = _FakeFlowFormerPlusPlus()
+        estimator.input_size = None
+        estimator.mixed_precision = False
+        image = torch.zeros(1, 3, 1288, 64)
+
+        with self.assertRaisesRegex(ValueError, "flowformerpp_input_size"):
+            estimator(image, image)
+
+    @mock.patch("models.flow_estimator._OfficialFlowFormerPlusPlus")
+    def test_config_selects_flowformerpp_and_accepts_alias(self, adapter):
+        adapter.return_value = nn.Identity()
+        config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config_paper.yaml")
+        estimator = FlowEstimator.from_config(
+            {
+                "_config_path": config_path,
+                "flow": {
+                    "model": "flowformer++",
+                    "fallback": None,
+                    "flowformerpp_repo": "third_party/FlowFormerPlusPlus",
+                    "flowformerpp_checkpoint": "checkpoints/things.pth",
+                    "flowformerpp_config": "submissions",
+                    "flowformerpp_input_size": [256, 448],
+                    "flowformerpp_strict_checkpoint": True,
+                    "flowformerpp_backbone_pretrained": False,
+                    "mixed_precision": False,
+                },
+            },
+            device=torch.device("cpu"),
+        )
+
+        expected_repo = os.path.join(os.path.dirname(os.path.dirname(__file__)), "third_party", "FlowFormerPlusPlus")
+        self.assertEqual(estimator.backend_name, "flowformerpp")
+        adapter.assert_called_once_with(
+            expected_repo,
+            "checkpoints/things.pth",
+            config_name="submissions",
+            input_size=[256, 448],
+            strict_checkpoint=True,
+            backbone_pretrained=False,
+            mixed_precision=False,
+        )
+
+
+class _FakeFlowFormerPlusPlus(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.inputs = None
+
+    def forward(self, first, second):
+        self.inputs = (first, second)
+        full = torch.ones(first.shape[0], 2, *first.shape[-2:], device=first.device)
+        low = torch.zeros(first.shape[0], 2, first.shape[-2] // 8, first.shape[-1] // 8)
+        return full, low
 
 
 class _FakeRaft(nn.Module):

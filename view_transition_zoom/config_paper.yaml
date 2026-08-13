@@ -15,18 +15,22 @@ output:
   save_numpy_flow: true
 
 flow:
-  model: flowformer
+  model: flowformerpp
   fallback: raft
   cache: true
-  flowformer_repo: third_party/FlowFormer-Official
-  flowformer_checkpoint: checkpoints/things.pth
+  flowformerpp_repo: third_party/FlowFormerPlusPlus
+  flowformerpp_checkpoint: checkpoints/things.pth
+  flowformerpp_config: submissions
+  flowformerpp_input_size: [432, 960]
+  flowformerpp_strict_checkpoint: true
+  flowformerpp_backbone_pretrained: false
   raft_variant: large
   raft_weights: default
   raft_input_size: null
   raft_progress: true
   precomputed_path: null
   reverse_precomputed_path: null
-  mixed_precision: false
+  mixed_precision: true
 
 target_flow:
   kernel_size: 600

@@ -7,8 +7,8 @@
 
 > 项目状态：研究复现，不是作者官方实现。截至 2026-08-12，论文的
 > [arXiv 页面](https://arxiv.org/abs/2312.11184)未给出代码仓库，公开代码索引仍为
-> “Request Code”。论文使用的光流骨干有独立的
-> [FlowFormer 官方仓库](https://github.com/drinkingcoder/FlowFormer-Official)。
+> “Request Code”。本项目默认光流骨干已迁移为
+> [FlowFormer++ 官方实现](https://github.com/XiaoyuShi97/FlowFormerPlusPlus)。
 
 ## 1. 核心几何约定
 
@@ -42,7 +42,7 @@ forward splatting，会累积 many-to-one 权重并显式返回 hole/valid mask�
 
 ```text
 Wide + Tele
-  -> FlowFormer / RAFT: F_T2W
+  -> FlowFormer++ / RAFT: F_T2W
   -> target flow: F_M, foreground/background means, F_target
   -> flow-aware distance M_dis
   -> F_hat = clip(F_target, F_original +/- rho*M_dis)
@@ -124,35 +124,65 @@ python demo_paper.py --wide wide.png --tele tele.png `
   --set flow.raft_variant=large --set flow.raft_weights=default
 ```
 
-### FlowFormer
+### FlowFormer++
 
-FlowFormer 不在本项目中伪造或重写。按其官方仓库安装：
+官方源码已固定在 `third_party/FlowFormerPlusPlus`，对应提交
+`c33de90f35af3fac1a55de6eac58036dd8ffb3b3`。安装推理依赖：
 
 ```powershell
-git clone https://github.com/drinkingcoder/FlowFormer-Official third_party/FlowFormer-Official
-python -m pip install -r requirements-flowformer.txt
+python -m pip install -r requirements-flowformerpp.txt
 ```
 
-根据官方 README 下载 checkpoint，例如放在：
+根据官方 README 的模型链接下载 checkpoint，例如放在：
 
 ```text
-third_party/FlowFormer-Official/checkpoints/things.pth
+third_party/FlowFormerPlusPlus/checkpoints/things.pth
 ```
 
-并检查 `config_*.yaml`：
+默认使用官方评估脚本采用的 `configs.submissions`。若加载自行训练的 checkpoint，应切换到
+其训练配置；严格加载会直接报告结构不匹配，不建议用 `strict: false` 掩盖问题：
 
 ```yaml
 flow:
-  model: flowformer
+  model: flowformerpp
   fallback: raft
-  flowformer_repo: third_party/FlowFormer-Official
-  flowformer_checkpoint: checkpoints/things.pth
+  flowformerpp_repo: third_party/FlowFormerPlusPlus
+  flowformerpp_checkpoint: checkpoints/things.pth
+  flowformerpp_config: submissions
+  flowformerpp_input_size: [432, 960]
+  flowformerpp_strict_checkpoint: true
+  flowformerpp_backbone_pretrained: false
+  mixed_precision: true
   raft_variant: large
   raft_weights: default
 ```
 
-官方仓库依赖较旧，常需要独立环境，并依赖 `yacs loguru einops timm==0.4.12`。
-加载失败时会明确告警并尝试 torchvision RAFT；fallback 使用同一组 `raft_*` 参数。
+`flowformer` 和 `flowformer++` 仍作为 `flowformerpp` 的兼容别名。适配器会关闭
+Twins 主干的额外联网预训练，因为完整 FlowFormer++ checkpoint 已包含主干参数；只有加载
+不含主干的部分权重时才设置 `flowformerpp_backbone_pretrained: true`。
+
+最小推理依赖为 `yacs`、`loguru`、`einops` 和固定的 `timm==0.4.12`；Windows 下
+Loguru 还需要 `win32-setctime`。默认 Twins + GMA 推理路径不需要编译仓库中的
+`alt_cuda_corr` 或 NAT CUDA 扩展。`imageio`、`matplotlib`、`tensorboard` 和数据集仅在
+运行官方可视化、评测或训练脚本时需要；官方评估脚本还额外导入 `attrs`。
+这些工具依赖可通过 `requirements-flowformerpp-tools.txt` 一次安装。
+官方 `train_FlowFormer.py` 未自行加入 `core` 搜索路径；在 PowerShell 中直接运行训练脚本前
+需要设置 `$env:PYTHONPATH="core"`。本机现有 `tb-nightly` 还报告
+`google-auth-oauthlib>=0.5` 的版本告警，虽然 `SummaryWriter` 已验证可导入；只做本项目
+推理无需处理该训练工具告警。
+
+本机已验证 `Python 3.8.16 + torch 1.13.1 + torchvision 0.14.1 + CUDA 11.7` 可构建并
+前向执行官方 FlowFormer++，无需降级到 README 中的 `torch 1.6 / CUDA 10.1`。128x128
+无权重接口测试在 RTX 3060 Ti 上，256x448 全精度峰值已分配显存约 3.06 GiB；
+432x960 全精度 OOM，而混合精度约 1.87 GiB、1.14 秒，因此两份默认配置启用了 AMP。
+`flowformerpp_input_size: [H, W]` 表示保持宽高比的最大估计尺寸，且不会放大小图；输出
+flow 会恢复原尺寸并同步缩放 dx/dy。
+单次非分块输入受 GMA 相对位置表限制，padding 后高和宽均不能超过 1280；超出时适配器
+会提示设置较小尺寸。官方评估常用 `[432, 960]` 分块，本项目当前提供缩放推理而非
+重叠 tile 推理。
+
+checkpoint 加载失败时会明确告警并尝试 torchvision RAFT；fallback 使用同一组
+`raft_*` 参数。
 离线调试支持 `flow.model=precomputed` 或 `farneback`，二者不代表论文精度。
 
 ## 5. 运行
@@ -241,7 +271,7 @@ difference、temporal warping error、flow consistency、mask temporal differenc
 | 空洞背景选择 | O 坐标最近有效 background flow，再 nearest fallback | `fill_mode` |
 | paper occlusion 扫描/矩形 rasterization | 按相机 left/right、upper/lower 邻接边界和 flow jump 画矩形 | `rectangle_scale`、相机方位 |
 | RHE 重叠块权重 | 抬高 Hann 窗加权，避免 block seam | block=200、stride=30、bins |
-| FlowFormer checkpoint | 官方没有唯一手机双摄 checkpoint | things/sintel/kitti 或域内微调 |
+| FlowFormer++ checkpoint | 官方没有手机双摄专用 checkpoint | things/sintel/kitti 或域内微调 |
 | overlap mask | 未提供标定 mask 时假设全帧 overlap | 应由真实 FOV 标定提供 |
 | mixed -> pure Tele endpoint | 在 Tele 有效 FOV 内以 beta 多带渐入 | `terminal_start: 0.75~0.9` |
 | 视频时序传播 | EMA；可选 Wide current->previous flow guidance | EMA、scene-cut threshold |
@@ -270,7 +300,7 @@ difference、temporal warping error、flow consistency、mask temporal differenc
 
 - 输入应先完成去畸变、时间同步和粗标定；代码不自动估计镜头畸变或 rolling shutter。
 - `center_crop` 是无标定基线。真正手机变焦应提供 W/T intrinsics 与真实 overlap mask。
-- FlowFormer 官方依赖老旧；本项目仅提供适配器，未重新发布其代码或权重。
+- FlowFormer++ 官方源码已保留上游许可证；模型权重未随项目重新发布。
 - paper occlusion 与 flow-aware distance 是可解释近似，需用真实遮挡 ground truth 校准。
 - 视频模式每帧仍需一对 W/T 光流；开启 flow-guided temporal 会额外增加一条时域 flow。
 - endpoint 中 Tele 在低于原生倍率时只覆盖中心有效区，外部保持 mixed/Wide，不生成不存在的 Tele 内容。
@@ -285,5 +315,6 @@ view_transition_zoom/
   paper_pipeline.py   zoom_runner.py     baselines.py
   synthetic_test.py   config_paper.yaml  config_zoom.yaml
   models/             view_transition/   fusion/
+  third_party/FlowFormerPlusPlus/
   zoom/               utils/             tests/
 ```

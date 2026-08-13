@@ -1,4 +1,4 @@
-"""Adapters for official FlowFormer, torchvision RAFT, and debug flow sources.
+"""Adapters for official FlowFormer++, torchvision RAFT, and debug flow sources.
 
 The public convention is fixed: ``FlowEstimator(wide, tele)`` returns
 ``F_T2W`` defined on Wide/output coordinates. For a Wide pixel ``p``, the
@@ -29,19 +29,30 @@ from utils.flow_utils import finite_flow, resize_flow
 SizeLike = Union[int, Sequence[int], torch.Size]
 
 
-def _raft_size(value: Optional[SizeLike]) -> Optional[Tuple[int, int]]:
-    """Normalize a config-friendly RAFT inference size to ``(height, width)``."""
+def _inference_size(value: Optional[SizeLike], name: str) -> Optional[Tuple[int, int]]:
+    """Normalize a config-friendly inference size to ``(height, width)``."""
     if value is None:
         return None
     if isinstance(value, int):
         result = (value, value)
     else:
         if len(value) != 2:
-            raise ValueError("raft_input_size must contain [height, width]")
+            raise ValueError("%s must contain [height, width]" % name)
         result = (int(value[0]), int(value[1]))
     if result[0] <= 0 or result[1] <= 0:
-        raise ValueError("raft_input_size values must be positive")
+        raise ValueError("%s values must be positive" % name)
     return result
+
+
+def _fit_within_size(
+    size: Tuple[int, int], maximum: Optional[Tuple[int, int]]
+) -> Tuple[int, int]:
+    """Fit ``size`` within a maximum canvas without upscaling or changing aspect."""
+    if maximum is None:
+        return size
+    height, width = size
+    scale = min(float(maximum[0]) / height, float(maximum[1]) / width, 1.0)
+    return max(1, int(round(height * scale))), max(1, int(round(width * scale)))
 
 
 def _resolve_raft_weights(variant: str, weights: Any) -> Any:
@@ -73,14 +84,14 @@ def _resolve_raft_weights(variant: str, weights: Any) -> Any:
 
 @contextmanager
 def _official_import_scope(repo_path: Path):
-    """Temporarily expose FlowFormer-Official's top-level import layout.
+    """Temporarily expose FlowFormer++'s top-level import layout.
 
     The official repository imports ``utils`` as a top-level package, which
     collides with this project's own package. Imported model objects retain
     their direct helper references, so restoring our modules after construction
     lets both codebases coexist in one process.
     """
-    roots = ("utils", "configs")
+    roots = ("utils", "configs", "core", "FlowFormer")
     saved_modules = {
         name: module
         for name, module in list(sys.modules.items())
@@ -124,8 +135,8 @@ def _extract_flow(prediction: Any) -> Tensor:
     return flow
 
 
-def _extract_flowformer_flow(prediction: Any) -> Tensor:
-    """Extract FlowFormer's full-resolution evaluation result.
+def _extract_flowformerpp_flow(prediction: Any) -> Tensor:
+    """Extract FlowFormer++'s full-resolution evaluation result.
 
     Official evaluation builds commonly return ``(flow_up, flow_low)`` while
     training-style builds return a prediction list. The first tuple element is
@@ -143,10 +154,14 @@ def _extract_flowformer_flow(prediction: Any) -> Tensor:
         flow = None
     if not isinstance(flow, Tensor) or flow.ndim != 4 or flow.shape[1] != 2:
         raise RuntimeError(
-            "FlowFormer must return full-resolution flow [B,2,H,W], got %r"
+            "FlowFormer++ must return full-resolution flow [B,2,H,W], got %r"
             % (getattr(flow, "shape", None),)
         )
     return flow
+
+
+# Kept for callers created before the FlowFormer++ migration.
+_extract_flowformer_flow = _extract_flowformerpp_flow
 
 
 def _validate_pair(wide: Tensor, tele: Tensor) -> None:
@@ -188,7 +203,7 @@ class _TorchvisionRaft(nn.Module):
             raise ValueError("RAFT minimum_size and pad_multiple must be positive")
 
         self.variant = variant
-        self.input_size = _raft_size(input_size)
+        self.input_size = _inference_size(input_size, "raft_input_size")
         self.minimum_size = int(minimum_size)
         self.pad_multiple = int(pad_multiple)
         constructor = raft_large if variant == "large" else raft_small
@@ -234,15 +249,19 @@ class _TorchvisionRaft(nn.Module):
         return flow
 
 
-class _OfficialFlowFormer(nn.Module):
-    """Thin loader for the unmodified FlowFormer-Official repository.
+class _OfficialFlowFormerPlusPlus(nn.Module):
+    """Thin inference loader for the unmodified official FlowFormer++ source."""
 
-    PAPER_AMBIGUITY: FlowFormer-Official does not publish one universal
-    photography checkpoint. The configured checkpoint choice remains an
-    experiment variable and is documented in README.
-    """
-
-    def __init__(self, repo: str, checkpoint: str, mixed_precision: bool = False) -> None:
+    def __init__(
+        self,
+        repo: str,
+        checkpoint: str,
+        config_name: str = "submissions",
+        input_size: Optional[SizeLike] = None,
+        strict_checkpoint: bool = True,
+        backbone_pretrained: bool = False,
+        mixed_precision: bool = False,
+    ) -> None:
         super().__init__()
         repo_path = Path(repo).expanduser().resolve()
         checkpoint_path = Path(checkpoint).expanduser()
@@ -250,54 +269,111 @@ class _OfficialFlowFormer(nn.Module):
             checkpoint_path = repo_path / checkpoint_path
         if not repo_path.is_dir():
             raise FileNotFoundError(
-                "FlowFormer-Official repository not found at %s. Clone "
-                "https://github.com/drinkingcoder/FlowFormer-Official there." % repo_path
+                "FlowFormer++ repository not found at %s. Clone "
+                "https://github.com/XiaoyuShi97/FlowFormerPlusPlus there." % repo_path
             )
         if not checkpoint_path.is_file():
-            raise FileNotFoundError("FlowFormer checkpoint not found: %s" % checkpoint_path)
+            raise FileNotFoundError("FlowFormer++ checkpoint not found: %s" % checkpoint_path)
+
+        config_name = str(config_name).strip()
+        if config_name.endswith(".py"):
+            config_name = config_name[:-3]
+        if not config_name or not config_name.replace("_", "").isalnum():
+            raise ValueError("flowformerpp_config must be a config module name such as 'things'")
+        config_file = repo_path / "configs" / (config_name + ".py")
+        if not config_file.is_file():
+            choices = sorted(item.stem for item in (repo_path / "configs").glob("*.py"))
+            raise FileNotFoundError(
+                "FlowFormer++ config %r was not found; available configs: %s"
+                % (config_name, choices)
+            )
 
         try:
             with _official_import_scope(repo_path):
-                get_cfg = importlib.import_module("configs.things_eval").get_cfg
-                build_flowformer = importlib.import_module("FlowFormer").build_flowformer
+                get_cfg = importlib.import_module("configs." + config_name).get_cfg
+                build_flowformer = importlib.import_module("core.FlowFormer").build_flowformer
                 cfg = get_cfg()
                 if hasattr(cfg, "defrost"):
                     cfg.defrost()
-                cfg.model = str(checkpoint_path)
-                if hasattr(cfg, "mixed_precision"):
-                    cfg.mixed_precision = bool(mixed_precision)
+                model_cfg = cfg[str(cfg.transformer)]
+                if hasattr(model_cfg, "pretrain"):
+                    # The complete FlowFormer++ checkpoint already contains the
+                    # Twins weights, so a second timm download is normally wrong.
+                    model_cfg.pretrain = bool(backbone_pretrained)
                 model = build_flowformer(cfg)
         except Exception as exc:
             raise ImportError(
-                "Could not import the official FlowFormer code. Install its pinned "
-                "dependencies (including yacs, loguru, einops, and timm==0.4.12)."
+                "Could not build the official FlowFormer++ model from config %r. "
+                "Install yacs, loguru, einops, and timm==0.4.12."
+                % config_name
             ) from exc
 
         payload = torch.load(str(checkpoint_path), map_location="cpu")
-        state = payload.get("state_dict", payload) if isinstance(payload, dict) else payload
+        state = payload
+        if isinstance(payload, Mapping):
+            for key in ("state_dict", "model_state_dict", "model"):
+                candidate = payload.get(key)
+                if isinstance(candidate, Mapping):
+                    state = candidate
+                    break
+        if not isinstance(state, Mapping):
+            raise RuntimeError("FlowFormer++ checkpoint does not contain a state dictionary")
         if any(str(key).startswith("module.") for key in state.keys()):
             state = {str(key)[7:] if str(key).startswith("module.") else key: value for key, value in state.items()}
-        missing, unexpected = model.load_state_dict(state, strict=False)
-        if missing or unexpected:
+        try:
+            incompatible = model.load_state_dict(state, strict=bool(strict_checkpoint))
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "FlowFormer++ checkpoint is incompatible with config %r: %s"
+                % (config_name, checkpoint_path)
+            ) from exc
+        if not strict_checkpoint and (incompatible.missing_keys or incompatible.unexpected_keys):
             warnings.warn(
-                "FlowFormer checkpoint loaded non-strictly (missing=%d, unexpected=%d)."
-                % (len(missing), len(unexpected)),
+                "FlowFormer++ checkpoint loaded non-strictly (missing=%d, unexpected=%d)."
+                % (len(incompatible.missing_keys), len(incompatible.unexpected_keys)),
                 RuntimeWarning,
             )
         self.model = model.eval()
         self.model.requires_grad_(False)
+        self.config_name = config_name
+        self.input_size = _inference_size(input_size, "flowformerpp_input_size")
+        self.mixed_precision = bool(mixed_precision)
 
     def forward(self, wide: Tensor, tele: Tensor) -> Tensor:
-        height, width = wide.shape[-2:]
-        target_h = int(math.ceil(height / 8.0) * 8)
-        target_w = int(math.ceil(width / 8.0) * 8)
-        pad_h, pad_w = target_h - height, target_w - width
-        first = F.pad(wide.float() * 255.0, (0, pad_w, 0, pad_h), mode="replicate")
-        second = F.pad(tele.float() * 255.0, (0, pad_w, 0, pad_h), mode="replicate")
-        with torch.no_grad():
+        original_size = tuple(wide.shape[-2:])
+        estimation_size = _fit_within_size(original_size, self.input_size)
+        first, second = wide.float(), tele.float()
+        if estimation_size != original_size:
+            first = F.interpolate(first, size=estimation_size, mode="bilinear", align_corners=False)
+            second = F.interpolate(second, size=estimation_size, mode="bilinear", align_corners=False)
+
+        estimate_h, estimate_w = estimation_size
+        target_h = int(math.ceil(max(128, estimate_h) / 8.0) * 8)
+        target_w = int(math.ceil(max(128, estimate_w) / 8.0) * 8)
+        if target_h > 1280 or target_w > 1280:
+            raise ValueError(
+                "FlowFormer++ single-pass input is limited to 1280x1280 by its "
+                "GMA relative-position table. Set flowformerpp_input_size to a "
+                "smaller [height, width], such as [432, 960]."
+            )
+        pad_h, pad_w = target_h - estimate_h, target_w - estimate_w
+        top, left = pad_h // 2, pad_w // 2
+        padding = (left, pad_w - left, top, pad_h - top)
+        # FlowFormer++ performs /255 and [-1,1] normalization inside forward.
+        first = F.pad(first * 255.0, padding, mode="replicate")
+        second = F.pad(second * 255.0, padding, mode="replicate")
+        amp_enabled = self.mixed_precision and first.is_cuda
+        with torch.no_grad(), torch.cuda.amp.autocast(enabled=amp_enabled):
             prediction = self.model(first, second)
-        flow = _extract_flowformer_flow(prediction)
-        return flow[..., :height, :width]
+        flow = _extract_flowformerpp_flow(prediction)
+        flow = flow[..., top : top + estimate_h, left : left + estimate_w]
+        if estimation_size != original_size:
+            flow = resize_flow(flow, original_size)
+        return flow
+
+
+# Internal compatibility alias. It now loads FlowFormer++, not FlowFormer ECCV 2022.
+_OfficialFlowFormer = _OfficialFlowFormerPlusPlus
 
 
 class FlowEstimator(nn.Module):
@@ -305,11 +381,15 @@ class FlowEstimator(nn.Module):
 
     def __init__(
         self,
-        model: str = "flowformer",
+        model: str = "flowformerpp",
         fallback: Optional[str] = "raft",
         weights: Any = "default",
-        flowformer_repo: str = "third_party/FlowFormer-Official",
-        flowformer_checkpoint: str = "checkpoints/things.pth",
+        flowformerpp_repo: str = "third_party/FlowFormerPlusPlus",
+        flowformerpp_checkpoint: str = "checkpoints/things.pth",
+        flowformerpp_config: str = "submissions",
+        flowformerpp_input_size: Optional[SizeLike] = None,
+        flowformerpp_strict_checkpoint: bool = True,
+        flowformerpp_backbone_pretrained: bool = False,
         precomputed_path: Optional[str] = None,
         raft_variant: str = "large",
         raft_weights: Any = None,
@@ -321,15 +401,19 @@ class FlowEstimator(nn.Module):
         device: Optional[torch.device] = None,
     ) -> None:
         super().__init__()
-        self.backend_name = model.lower().replace("-", "_")
+        self.backend_name = self._normalize_backend_name(model)
         self.precomputed_path = precomputed_path
         effective_raft_weights = weights if raft_weights is None else raft_weights
         try:
             self.backend = self._build_backend(
                 self.backend_name,
                 effective_raft_weights,
-                flowformer_repo,
-                flowformer_checkpoint,
+                flowformerpp_repo,
+                flowformerpp_checkpoint,
+                flowformerpp_config,
+                flowformerpp_input_size,
+                flowformerpp_strict_checkpoint,
+                flowformerpp_backbone_pretrained,
                 raft_variant,
                 raft_input_size,
                 raft_progress,
@@ -338,19 +422,24 @@ class FlowEstimator(nn.Module):
                 mixed_precision,
             )
         except (ImportError, FileNotFoundError, RuntimeError) as exc:
-            if fallback is None or fallback.lower() in ("none", self.backend_name):
+            fallback_name = None if fallback is None else self._normalize_backend_name(fallback)
+            if fallback_name is None or fallback_name in ("none", self.backend_name):
                 raise
             warnings.warn(
                 "%s backend unavailable (%s). Falling back to %s."
                 % (self.backend_name, exc, fallback),
                 RuntimeWarning,
             )
-            self.backend_name = fallback.lower()
+            self.backend_name = fallback_name
             self.backend = self._build_backend(
                 self.backend_name,
                 effective_raft_weights,
-                flowformer_repo,
-                flowformer_checkpoint,
+                flowformerpp_repo,
+                flowformerpp_checkpoint,
+                flowformerpp_config,
+                flowformerpp_input_size,
+                flowformerpp_strict_checkpoint,
+                flowformerpp_backbone_pretrained,
                 raft_variant,
                 raft_input_size,
                 raft_progress,
@@ -361,12 +450,28 @@ class FlowEstimator(nn.Module):
         if device is not None:
             self.to(device)
 
+    @staticmethod
+    def _normalize_backend_name(name: Any) -> str:
+        normalized = str(name).strip().lower().replace("-", "_")
+        if normalized in (
+            "flowformer",
+            "flowformer++",
+            "flowformerplusplus",
+            "flowformer_plus_plus",
+        ):
+            return "flowformerpp"
+        return normalized
+
     def _build_backend(
         self,
         name: str,
         weights: Any,
         repo: str,
         checkpoint: str,
+        flowformerpp_config: str,
+        flowformerpp_input_size: Optional[SizeLike],
+        flowformerpp_strict_checkpoint: bool,
+        flowformerpp_backbone_pretrained: bool,
         raft_variant: str,
         raft_input_size: Optional[SizeLike],
         raft_progress: bool,
@@ -374,8 +479,16 @@ class FlowEstimator(nn.Module):
         raft_pad_multiple: int,
         mixed_precision: bool,
     ) -> Optional[nn.Module]:
-        if name == "flowformer":
-            return _OfficialFlowFormer(repo, checkpoint, mixed_precision=mixed_precision)
+        if name == "flowformerpp":
+            return _OfficialFlowFormerPlusPlus(
+                repo,
+                checkpoint,
+                config_name=flowformerpp_config,
+                input_size=flowformerpp_input_size,
+                strict_checkpoint=flowformerpp_strict_checkpoint,
+                backbone_pretrained=flowformerpp_backbone_pretrained,
+                mixed_precision=mixed_precision,
+            )
         if name in ("raft_large", "torchvision_raft_large"):
             raft_variant = "large"
         elif name in ("raft_small", "torchvision_raft_small"):
@@ -409,7 +522,11 @@ class FlowEstimator(nn.Module):
         section = config.get("flow", config)
         config_path = config.get("_config_path")
         config_root = Path(config_path).parent if config_path else Path.cwd()
-        repo = Path(str(section.get("flowformer_repo", "third_party/FlowFormer-Official"))).expanduser()
+        repo_value = section.get(
+            "flowformerpp_repo",
+            section.get("flowformer_repo", "third_party/FlowFormerPlusPlus"),
+        )
+        repo = Path(str(repo_value)).expanduser()
         if not repo.is_absolute():
             repo = config_root / repo
         precomputed = section.get("precomputed_path")
@@ -418,15 +535,28 @@ class FlowEstimator(nn.Module):
             if not precomputed_path.is_absolute():
                 precomputed_path = config_root / precomputed_path
             precomputed = str(precomputed_path)
-        model_name = str(section.get("model", "flowformer"))
+        model_name = str(section.get("model", "flowformerpp"))
         model_key = model_name.lower().replace("-", "_")
         default_variant = "small" if model_key.endswith("raft_small") else "large"
         return cls(
             model=model_name,
             fallback=section.get("fallback", "raft"),
             weights=section.get("weights", "default"),
-            flowformer_repo=str(repo),
-            flowformer_checkpoint=str(section.get("flowformer_checkpoint", "checkpoints/things.pth")),
+            flowformerpp_repo=str(repo),
+            flowformerpp_checkpoint=str(
+                section.get(
+                    "flowformerpp_checkpoint",
+                    section.get("flowformer_checkpoint", "checkpoints/things.pth"),
+                )
+            ),
+            flowformerpp_config=str(section.get("flowformerpp_config", "submissions")),
+            flowformerpp_input_size=section.get("flowformerpp_input_size"),
+            flowformerpp_strict_checkpoint=bool(
+                section.get("flowformerpp_strict_checkpoint", True)
+            ),
+            flowformerpp_backbone_pretrained=bool(
+                section.get("flowformerpp_backbone_pretrained", False)
+            ),
             precomputed_path=precomputed,
             raft_variant=str(section.get("raft_variant", section.get("variant", default_variant))),
             raft_weights=section.get("raft_weights", section.get("weights", "default")),
