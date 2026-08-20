@@ -93,8 +93,6 @@ zoom:
   interpolation: log
   schedule: smootherstep
   custom_schedule: null
-  endpoint_mode: tele_endpoint
-  terminal_start: 0.8
   fov_mode: center_crop
   wide_intrinsics: null
   tele_intrinsics: null

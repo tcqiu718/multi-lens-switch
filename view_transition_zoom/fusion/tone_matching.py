@@ -141,6 +141,38 @@ class ToneResult:
     bias: Optional[torch.Tensor] = None
 
 
+def interpolate_affine_tone_pair(
+    source: torch.Tensor,
+    reference: torch.Tensor,
+    reference_full: torch.Tensor,
+    gain: torch.Tensor,
+    bias: torch.Tensor,
+    progress: float,
+    eps: float = 1.0e-4,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Move both images from reference tone to source tone without a seam.
+
+    ``gain * source + bias`` is the source-to-reference calibration. At zero
+    progress source is corrected to reference; at one, reference is corrected
+    with the inverse calibration and source is unchanged.
+    """
+    if source.shape != reference.shape or source.shape != reference_full.shape:
+        raise ValueError("source, reference, and reference_full shapes must match")
+    if gain.shape != source.shape or bias.shape != source.shape:
+        raise ValueError("gain and bias must match the image shape")
+    value = min(max(float(progress), 0.0), 1.0)
+    inverse_gain = gain.clamp_min(eps)
+    source_reference_tone = gain * source + bias
+    reference_source_tone = (reference - bias) / inverse_gain
+    reference_full_source_tone = (reference_full - bias) / inverse_gain
+    source_output = torch.lerp(source_reference_tone, source, value).clamp(0.0, 1.0)
+    reference_output = torch.lerp(reference, reference_source_tone, value).clamp(0.0, 1.0)
+    reference_full_output = torch.lerp(reference_full, reference_full_source_tone, value).clamp(0.0, 1.0)
+    effective_gain = torch.lerp(gain, torch.ones_like(gain), value)
+    effective_bias = bias * (1.0 - value)
+    return source_output, reference_output, reference_full_output, effective_gain, effective_bias
+
+
 class ToneMatcher:
     """Stateful tone matcher; temporal state is used only by affine mode."""
 
@@ -202,10 +234,10 @@ class ToneMatcher:
 
 
 __all__ = [
+    "interpolate_affine_tone_pair",
     "ToneMatcher",
     "ToneResult",
     "global_histogram_match",
     "local_affine_parameters",
     "regional_histogram_match",
 ]
-

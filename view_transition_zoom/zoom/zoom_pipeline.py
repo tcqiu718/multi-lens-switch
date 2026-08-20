@@ -9,8 +9,7 @@ import torch
 
 from fusion.full_view_fusion import FusionResult, full_view_fusion
 from fusion.occlusion import OcclusionResult, fb_consistency_occlusion, paper_occlusion, soften_occlusion
-from fusion.pyramid_blending import pyramid_blend
-from fusion.tone_matching import ToneMatcher, ToneResult
+from fusion.tone_matching import ToneMatcher, ToneResult, interpolate_affine_tone_pair
 from models.flow_estimator import FlowEstimator
 from utils.image_io import validate_image_pair
 from utils.flow_utils import load_flow
@@ -32,6 +31,7 @@ class PreparedPair:
     boundary: Any
     constrained: Any
     overlap_mask: torch.Tensor
+    tone_calibration: ToneResult
 
 
 @dataclass
@@ -70,8 +70,6 @@ class ContinuousZoomPipeline:
             tele_zoom=float(camera_cfg.get("tele_zoom", zoom_cfg.get("tele_ratio", 3.0))),
             interpolation=str(zoom_cfg.get("interpolation", "log")),
             curve=str(zoom_cfg.get("schedule", zoom_cfg.get("curve", "smootherstep"))),
-            endpoint_mode=str(zoom_cfg.get("endpoint_mode", "tele_endpoint")),
-            terminal_start=float(zoom_cfg.get("terminal_start", zoom_cfg.get("endpoint_start", 0.8))),
             custom_values=zoom_cfg.get("custom_schedule"),
         )
         temporal_cfg = config.get("temporal", {})
@@ -153,8 +151,30 @@ class ContinuousZoomPipeline:
         overlap = torch.ones_like(wide[:, :1]) if overlap_mask is None else overlap_mask.to(self.device)
         if overlap.shape != wide[:, :1].shape or not torch.any(overlap > 0.5):
             raise ValueError("A non-empty overlap mask shaped [B,1,H,W] is required")
+        zero_delta = torch.zeros_like(flow_t2w)
+        calibration_tele, calibration_wide = self.view_engine.transform(
+            wide,
+            tele,
+            flow_t2w,
+            zero_delta,
+            target.foreground_mask,
+        )
+        calibration_valid = calibration_tele.valid_mask * calibration_wide.valid_mask
+        tone_calibration = self.tone_matcher(
+            calibration_tele.image,
+            calibration_wide.image,
+            calibration_valid,
+        )
         prepared = PreparedPair(
-            wide, tele, flow_t2w, reverse_flow, target, boundary, constrained, overlap
+            wide,
+            tele,
+            flow_t2w,
+            reverse_flow,
+            target,
+            boundary,
+            constrained,
+            overlap,
+            tone_calibration,
         )
         if cacheable:
             self._prepared_cache_key = cache_key
@@ -263,15 +283,35 @@ class ContinuousZoomPipeline:
         else:
             smooth_occ, smooth_overlap = occlusion.soft_mask, pair.overlap_mask
         occlusion = OcclusionResult(occlusion.hard_mask, smooth_occ, occlusion.consistency_error)
-        tone = self.tone_matcher(view.tele.image, view.wide.image, view.tele.valid_mask * view.wide.valid_mask)
+        calibration = pair.tone_calibration
+        if calibration.gain is not None and calibration.bias is not None:
+            tele_tone, wide_tone, wide_full_tone, gain, bias = interpolate_affine_tone_pair(
+                view.tele.image,
+                view.wide.image,
+                pair.wide,
+                calibration.gain,
+                calibration.bias,
+                point.tone_progress,
+            )
+            tone = ToneResult(tele_tone, gain, bias)
+        else:
+            current_tone = self.tone_matcher(
+                view.tele.image,
+                view.wide.image,
+                view.tele.valid_mask * view.wide.valid_mask,
+            )
+            tele_tone = torch.lerp(current_tone.image, view.tele.image, point.tone_progress)
+            wide_tone = view.wide.image
+            wide_full_tone = pair.wide
+            tone = ToneResult(tele_tone)
         blend_cfg = self.config.get("blend", {})
         levels = int(blend_cfg.get("pyramid_levels", 5))
         geometric_valid = torch.maximum(view.wide.valid_mask, view.tele.valid_mask)
         effective_overlap = smooth_overlap * geometric_valid
         fusion = full_view_fusion(
-            view.wide.image,
+            wide_tone,
             tone.image,
-            pair.wide,
+            wide_full_tone,
             smooth_occ,
             effective_overlap,
             levels,
@@ -281,18 +321,21 @@ class ContinuousZoomPipeline:
         tele_fov = self._apply_fov(pair.tele, zoom, self.schedule.tele_zoom)
 
         result = fov.image
-        if point.beta > 0.0:
-            endpoint_mask = tele_fov.valid_mask * point.beta
-            result = pyramid_blend(tele_fov.image, result, endpoint_mask, levels)
+        if point.is_wide_endpoint:
+            result = pair.wide.clone()
+        elif point.is_tele_endpoint:
+            result = pair.tele.clone()
         mixed_tele_selection = (1.0 - smooth_occ) * effective_overlap * view.tele.valid_mask
         mixed_selection_fov = self._apply_fov(
             mixed_tele_selection, zoom, self.schedule.wide_zoom
         )
         overlap_fov = self._apply_fov(effective_overlap, zoom, self.schedule.wide_zoom)
-        endpoint_selection = tele_fov.valid_mask * point.beta
-        tele_selection = endpoint_selection + (1.0 - endpoint_selection) * mixed_selection_fov.image
-        denominator = torch.maximum(overlap_fov.image, endpoint_selection).sum().clamp_min(1.0)
-        tele_usage = float((tele_selection.sum() / denominator).detach().cpu())
+        denominator = overlap_fov.image.sum().clamp_min(1.0)
+        tele_usage = float((mixed_selection_fov.image.sum() / denominator).detach().cpu())
+        if point.is_wide_endpoint:
+            tele_usage = 0.0
+        elif point.is_tele_endpoint:
+            tele_usage = 1.0
         return ZoomFrameResult(point, view, occlusion, tone, fusion, fov, tele_fov, result, tele_usage)
 
 

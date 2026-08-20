@@ -8,6 +8,7 @@ from torch import nn
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from fusion.tone_matching import interpolate_affine_tone_pair
 from view_transition.flow_transform import interpolate_transformation
 from zoom.fov_transform import center_crop_fov
 from zoom.zoom_schedule import ZoomSchedule
@@ -36,7 +37,7 @@ class ZoomContinuityTest(unittest.TestCase):
             "tone": {"mode": "none"},
             "blend": {"pyramid_levels": 3},
             "camera": {"wide_zoom": 1.0, "tele_zoom": 3.0},
-            "zoom": {"endpoint_mode": "paper_mixed"},
+            "zoom": {},
             "temporal": {"enabled": False},
         }
         pipeline = ContinuousZoomPipeline(config, torch.device("cpu"), estimator)
@@ -57,18 +58,61 @@ class ZoomContinuityTest(unittest.TestCase):
         self.assertLess(abs(alpha[1] - alpha[0]), 1.0e-4)
         self.assertLess(abs(alpha[-1] - alpha[-2]), 1.0e-4)
 
-    def test_endpoint_beta_is_smooth_and_separate(self):
+    def test_only_native_zoom_values_are_endpoints(self):
         schedule = ZoomSchedule(
             1.0,
             3.0,
             interpolation="linear",
             curve="linear",
-            endpoint_mode="tele_endpoint",
-            terminal_start=0.8,
         )
-        self.assertEqual(schedule(2.5).beta, 0.0)
-        self.assertGreater(schedule(2.8).beta, 0.0)
-        self.assertAlmostEqual(schedule(3.0).beta, 1.0, places=8)
+        self.assertTrue(schedule(1.0).is_wide_endpoint)
+        self.assertFalse(schedule(1.0).is_tele_endpoint)
+        self.assertFalse(schedule(2.9).is_wide_endpoint)
+        self.assertFalse(schedule(2.9).is_tele_endpoint)
+        self.assertTrue(schedule(3.0).is_tele_endpoint)
+        self.assertAlmostEqual(schedule(2.0).tone_progress, 0.5, places=8)
+
+    def test_affine_tone_transition_has_exact_tone_endpoints(self):
+        tele = torch.full((1, 3, 4, 5), 0.2)
+        wide = torch.full_like(tele, 0.5)
+        gain = torch.full_like(tele, 2.0)
+        bias = torch.full_like(tele, 0.1)
+        start = interpolate_affine_tone_pair(tele, wide, wide, gain, bias, 0.0)
+        middle = interpolate_affine_tone_pair(tele, wide, wide, gain, bias, 0.5)
+        end = interpolate_affine_tone_pair(tele, wide, wide, gain, bias, 1.0)
+        self.assertTrue(torch.allclose(start[0], wide))
+        self.assertTrue(torch.allclose(start[1], wide))
+        self.assertTrue(torch.allclose(middle[0], torch.full_like(tele, 0.35)))
+        self.assertTrue(torch.allclose(middle[1], torch.full_like(tele, 0.35)))
+        self.assertTrue(torch.allclose(end[0], tele))
+        self.assertTrue(torch.allclose(end[1], tele))
+
+    def test_render_uses_exact_camera_frames_only_at_endpoints(self):
+        estimator = CountingEstimator()
+        config = {
+            "flow": {"cache": True},
+            "target_flow": {"kernel_size": 5},
+            "boundary": {"mode": "simple"},
+            "view_transition": {"ratio": 0.01},
+            "occlusion": {"mode": "paper", "soft_width": 2},
+            "tone": {"mode": "none"},
+            "blend": {"pyramid_levels": 2, "overlap_soft_width": 4},
+            "camera": {"wide_zoom": 1.0, "tele_zoom": 3.0},
+            "zoom": {"interpolation": "linear", "schedule": "linear"},
+            "temporal": {"enabled": False},
+        }
+        pipeline = ContinuousZoomPipeline(config, torch.device("cpu"), estimator)
+        wide = torch.full((1, 3, 24, 32), 0.2)
+        tele = torch.full_like(wide, 0.8)
+        pair = pipeline.prepare_pair(wide, tele)
+        start = pipeline.render(pair, 1.0)
+        middle = pipeline.render(pair, 2.9)
+        end = pipeline.render(pair, 3.0)
+        self.assertTrue(torch.equal(start.result, wide))
+        self.assertFalse(torch.equal(middle.result, tele))
+        self.assertTrue(torch.equal(end.result, tele))
+        self.assertEqual(start.tele_usage_ratio, 0.0)
+        self.assertEqual(end.tele_usage_ratio, 1.0)
 
     def test_alpha_zero_and_one_have_exact_flow_endpoints(self):
         original = torch.rand(1, 2, 12, 16)

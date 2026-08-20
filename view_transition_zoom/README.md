@@ -65,8 +65,8 @@ Wide + Tele
 ```text
 zoom ratio z -> FOV(z)          # crop / intrinsics
              -> alpha(z)        # viewpoint: W -> paper mixed view
+             -> gamma(z)        # tone: Wide -> Tele
 rho          -> local constraint # 几何安全边界，不等于 alpha
-beta(z)      -> Tele endpoint    # mixed view -> pure Tele，平滑启动
 ```
 
 连续模式使用：
@@ -78,8 +78,9 @@ F_hat_z     = F_original + delta_z
 ```
 
 支持 `linear/log` 倍率归一化，`linear/smoothstep/smootherstep/cosine/custom`
-曲线。`tele_endpoint` 在 `terminal_start` 后用第二个 smoothstep `beta` 渐进收敛；
-不存在阈值硬切镜。在中心裁剪模式下，`z=z_T, beta=1` 的输出严格收敛到 Tele。
+曲线。默认 `gamma=alpha`：Tele->Wide 的仿射校正随倍率逐渐退回恒等映射，同时 Wide
+应用逆校正逐渐接近 Tele 色调。`terminal_start/beta` 已移除；Wide 原生倍率严格输出
+原始 Wide，中间倍率全部输出融合结果，只有 Tele 原生倍率严格输出原始 Tele。
 
 视频模式平滑 paper delta、occlusion/overlap mask 和 local-affine tone 参数；可选
 current-Wide -> previous-Wide 光流传播，并在场景切换时清空历史状态。
@@ -254,7 +255,8 @@ results/{overlap_result,full_result}.png
 ```
 
 `demo_zoom.py` 保存 `zoom_result.mp4`、三联 `comparison.mp4`、5 类 baseline 抽帧、
-`zoom_schedule.csv`、`zoom_parameters.csv` 和 `metrics.csv`。指标包含 adjacent-frame
+`zoom_schedule.csv`、`zoom_parameters.csv` 和 `metrics.csv`。0 号帧在 Wide 原生倍率下
+严格等于输入 Wide，最后一帧在 Tele 原生倍率下严格等于输入 Tele；中间帧均为融合结果。指标包含 adjacent-frame
 difference、temporal warping error、flow consistency、mask temporal difference、亮度变化、
 `mean_flow`、`mean_delta`、occlusion ratio 与 `tele_usage_ratio`。
 `d_alpha/dd_alpha` 按实际 FPS 记录为每秒一阶/二阶变化率，crop box 也逐帧写入 CSV。
@@ -273,7 +275,7 @@ difference、temporal warping error、flow consistency、mask temporal differenc
 | RHE 重叠块权重 | 抬高 Hann 窗加权，避免 block seam | block=200、stride=30、bins |
 | FlowFormer++ checkpoint | 官方没有手机双摄专用 checkpoint | things/sintel/kitti 或域内微调 |
 | overlap mask | 未提供标定 mask 时假设全帧 overlap | 应由真实 FOV 标定提供 |
-| mixed -> pure Tele endpoint | 在 Tele 有效 FOV 内以 beta 多带渐入 | `terminal_start: 0.75~0.9` |
+| mixed -> pure Tele endpoint | 仅 Tele 原生倍率使用原始 Tele，其余倍率保持融合 | 端点前一帧数量、tone 曲线 |
 | 视频时序传播 | EMA；可选 Wide current->previous flow guidance | EMA、scene-cut threshold |
 
 最敏感参数通常依次是：光流模型/权重、输入标定与 overlap、`rho`、flow-gradient 阈值、
@@ -290,7 +292,6 @@ difference、temporal warping error、flow consistency、mask temporal differenc
 - `temporal.enabled`: `true, false`
 - `tone.mode`: `paper_rhe, local_affine_temporal, none`
 - `occlusion.mode`: `paper, fb_consistency`
-- `zoom.endpoint_mode`: `paper_mixed, tele_endpoint`
 - `zoom.fov_mode`: `center_crop, intrinsics`
 
 建议先在合成场景确认方向，再在静态真实 pair 调 `rho/boundary/occlusion`，最后才开启 tone
@@ -303,7 +304,8 @@ difference、temporal warping error、flow consistency、mask temporal differenc
 - FlowFormer++ 官方源码已保留上游许可证；模型权重未随项目重新发布。
 - paper occlusion 与 flow-aware distance 是可解释近似，需用真实遮挡 ground truth 校准。
 - 视频模式每帧仍需一对 W/T 光流；开启 flow-guided temporal 会额外增加一条时域 flow。
-- endpoint 中 Tele 在低于原生倍率时只覆盖中心有效区，外部保持 mixed/Wide，不生成不存在的 Tele 内容。
+- 中间倍率始终是 mixed 输出；只有精确到达 Tele 原生倍率时才使用原始 Tele，因此自定义
+  schedule 若不以 `camera.tele_zoom` 结束，就不会输出纯 Tele 端点。
 - 当前仅实现解析几何与经典融合；预留 learned transition、learned mask、frame interpolation、
   novel-view renderer 接口，但没有用网络替代论文困难步骤。
 

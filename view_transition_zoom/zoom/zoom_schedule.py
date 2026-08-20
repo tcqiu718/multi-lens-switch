@@ -16,14 +16,17 @@ class ZoomPoint:
     zoom: float
     progress: float
     alpha: float
-    beta: float
+    tone_progress: float
+    is_wide_endpoint: bool
+    is_tele_endpoint: bool
 
 
 class ZoomSchedule:
     """Map optical zoom ratios to smooth viewpoint progress.
 
     ``interpolation`` controls ratio normalization (linear or log); ``curve``
-    controls easing. Endpoint beta is separate from paper-view alpha.
+    controls easing for both viewpoint and tone progression. Native camera
+    endpoints are explicit frames rather than a terminal cross-fade interval.
     """
 
     def __init__(
@@ -32,27 +35,19 @@ class ZoomSchedule:
         tele_zoom: float,
         interpolation: str = "log",
         curve: str = "smootherstep",
-        endpoint_mode: str = "tele_endpoint",
-        terminal_start: float = 0.8,
         custom_values: Optional[Sequence[float]] = None,
     ) -> None:
         if wide_zoom <= 0 or tele_zoom <= 0 or tele_zoom <= wide_zoom:
             raise ValueError("Require 0 < wide_zoom < tele_zoom")
-        if not 0.0 <= terminal_start < 1.0:
-            raise ValueError("terminal_start must be in [0,1)")
         self.wide_zoom = float(wide_zoom)
         self.tele_zoom = float(tele_zoom)
         self.interpolation = interpolation.lower()
         self.curve = curve.lower()
-        self.endpoint_mode = endpoint_mode.lower()
-        self.terminal_start = float(terminal_start)
         self.custom_values = None if custom_values is None else np.asarray(custom_values, dtype=np.float64)
         if self.interpolation not in ("linear", "log"):
             raise ValueError("interpolation must be linear or log")
         if self.curve not in ("linear", "smoothstep", "smootherstep", "cosine", "custom"):
             raise ValueError("Unsupported zoom curve: %s" % curve)
-        if self.endpoint_mode not in ("paper_mixed", "tele_endpoint"):
-            raise ValueError("endpoint_mode must be paper_mixed or tele_endpoint")
         if self.curve == "custom" and (self.custom_values is None or len(self.custom_values) < 2):
             raise ValueError("custom curve needs at least two samples")
 
@@ -82,18 +77,18 @@ class ZoomSchedule:
         positions = np.linspace(0.0, 1.0, len(self.custom_values))
         return float(np.interp(value, positions, self.custom_values))
 
-    @staticmethod
-    def _smoothstep(value: float) -> float:
-        value = min(max(value, 0.0), 1.0)
-        return value * value * (3.0 - 2.0 * value)
-
     def __call__(self, zoom: float) -> ZoomPoint:
         progress = self.normalized_progress(zoom)
         alpha = self.ease(progress)
-        beta = 0.0
-        if self.endpoint_mode == "tele_endpoint" and alpha > self.terminal_start:
-            beta = self._smoothstep((alpha - self.terminal_start) / (1.0 - self.terminal_start))
-        return ZoomPoint(float(zoom), progress, alpha, beta)
+        tolerance = 1.0e-8
+        return ZoomPoint(
+            float(zoom),
+            progress,
+            alpha,
+            alpha,
+            progress <= tolerance,
+            progress >= 1.0 - tolerance,
+        )
 
     def sample(self, start: float, end: float, frames: int) -> List[ZoomPoint]:
         if frames <= 0:
@@ -116,9 +111,33 @@ def write_schedule_csv(path: str, points: Iterable[ZoomPoint], fps: float = 1.0)
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["frame", "zoom_ratio", "progress", "alpha", "beta", "d_alpha", "dd_alpha"])
+        writer.writerow(
+            [
+                "frame",
+                "zoom_ratio",
+                "progress",
+                "alpha",
+                "tone_progress",
+                "is_wide_endpoint",
+                "is_tele_endpoint",
+                "d_alpha",
+                "dd_alpha",
+            ]
+        )
         for index, item in enumerate(rows):
-            writer.writerow([index, item.zoom, item.progress, item.alpha, item.beta, first[index], second[index]])
+            writer.writerow(
+                [
+                    index,
+                    item.zoom,
+                    item.progress,
+                    item.alpha,
+                    item.tone_progress,
+                    int(item.is_wide_endpoint),
+                    int(item.is_tele_endpoint),
+                    first[index],
+                    second[index],
+                ]
+            )
     return output
 
 
