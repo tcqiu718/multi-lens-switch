@@ -29,11 +29,15 @@ def save_zoom_debug(
     write_image(str(output / "flow_target.png"), flow_to_color(pair.target.target_flow))
     write_image(str(output / "delta_paper.png"), flow_to_color(pair.constrained.delta_flow))
     write_image(str(output / "delta_zoom.png"), flow_to_color(result.view.delta_flow))
+    if result.view.wide_motion is not None:
+        write_image(str(output / "wide_motion.png"), flow_to_color(result.view.wide_motion))
+    if result.view.tele_motion is not None:
+        write_image(str(output / "tele_motion.png"), flow_to_color(result.view.tele_motion))
     write_mask(str(output / "distance_map.png"), pair.boundary.distance, normalize=True)
     write_mask(str(output / "occlusion.png"), result.occlusion.soft_mask)
     write_image(str(output / "tele_O.png"), result.view.tele.image)
     write_image(str(output / "wide_O.png"), result.view.wide.image)
-    write_mask(str(output / "blend_mask.png"), result.occlusion.soft_mask)
+    write_mask(str(output / "blend_mask.png"), result.fusion.occlusion_mask)
     write_mask(str(output / "overlap_mask.png"), result.fusion.overlap_mask)
     write_image(str(output / "result.png"), result.result)
     return output
@@ -80,6 +84,7 @@ def render_static_sequence(
                     "tone_progress": result.zoom_point.tone_progress,
                     "is_wide_endpoint": int(result.zoom_point.is_wide_endpoint),
                     "is_tele_endpoint": int(result.zoom_point.is_tele_endpoint),
+                    "geometry_mode": pipeline.geometry_mode,
                     "rho": rho,
                     "crop": result.fov.crop_scale,
                     "crop_x0": result.fov.crop_box[0],

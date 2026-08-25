@@ -110,7 +110,7 @@ def main() -> None:
                     pipeline.reset_temporal()
                 elif flow_guided:
                     temporal_flow = pipeline.estimate_temporal_flow(wide, previous_wide)
-            # Each synchronized video pair computes its dual-camera flow once.
+            # Each synchronized pair computes both camera correspondence directions once.
             pair = pipeline.prepare_pair(wide, tele, overlap_mask=overlap_mask)
             result = pipeline.render(pair, float(zoom), temporal_flow=temporal_flow)
             writer.write(result.result)

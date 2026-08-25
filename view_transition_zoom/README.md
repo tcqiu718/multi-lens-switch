@@ -17,7 +17,8 @@
 | 张量 | shape | 坐标含义 |
 |---|---:|---|
 | `I_W`, `I_T` | `[B,3,H,W]` | Wide / Tele RGB |
-| `F_T2W` | `[B,2,H,W]` | 定义在 W 输出坐标；通道 0=`dx`，1=`dy` |
+| `F_T2W` | `[B,2,H,W]` | 定义在 W 输出坐标；`p_T=p_W+F_T2W(p_W)` |
+| `F_W2T` | `[B,2,H,W]` | 定义在 T 输出坐标；`p_W=p_T+F_W2T(p_T)` |
 | `M_*` | `[B,1,H,W]` | mask / distance / weight |
 | `F_hat` | `[B,2,H,W]` | 受约束的 mixed-view target flow |
 | `delta_F` | `[B,2,H,W]` | `F_hat - F_T2W`，W -> O 的 forward displacement |
@@ -60,30 +61,43 @@ Wide + Tele
 
 ## 3. Continuous Zoom 扩展
 
-三个参数严格分离：
+默认 `zoom.geometry_mode=bidirectional_flow` 使用双向光流构造严格连接两台原生相机的
+虚拟视点。对一对对应像素：
 
 ```text
-zoom ratio z -> FOV(z)          # crop / intrinsics
-             -> alpha(z)        # viewpoint: W -> paper mixed view
-             -> gamma(z)        # tone: Wide -> Tele
-rho          -> local constraint # 几何安全边界，不等于 alpha
+p_T = p_W + F_T2W(p_W)
+p_W = p_T + F_W2T(p_T)
+
+q_W = A_W(z, p_W)               # Wide 像素投到目标焦距坐标
+q_T = A_T(z, p_T)               # Tele 像素投到目标焦距坐标
+p_O = (1-alpha) * q_W + alpha * q_T
 ```
 
-连续模式使用：
+`A_W/A_T` 在 `center_crop` 模式下是以图像中心为原点的倍率变换，在 `intrinsics`
+模式下是 `K_target * inverse(K_source)`。Wide 和 Tele 从各自坐标前向 splat 到同一个
+`p_O`，因此理想对应点在每个中间倍率都重合：
 
 ```text
-delta_paper = F_hat_paper - F_original
-delta_z     = alpha(z) * delta_paper
-F_hat_z     = F_original + delta_z
+alpha=0: Wide motion=0，严格处于 Wide 原生几何
+0<alpha<1: 双摄共同投影到连续 mixed view
+alpha=1: Tele motion=0，严格处于 Tele 原生几何
 ```
+
+相机选择权重同样具有严格端点：基础 Wide 权重为 `1-alpha`，遮挡保护使用
+`viewpoint_occlusion_strength * alpha * (1-alpha) * M_occ`，因此只在中间视点增强，
+到 Tele 端点严格衰减为 0；仅 Tele splat 空洞会临时回退到已对齐的 Wide。
 
 支持 `linear/log` 倍率归一化，`linear/smoothstep/smootherstep/cosine/custom`
 曲线。默认 `gamma=alpha`：Tele->Wide 的仿射校正随倍率逐渐退回恒等映射，同时 Wide
 应用逆校正逐渐接近 Tele 色调。`terminal_start/beta` 已移除；Wide 原生倍率严格输出
 原始 Wide，中间倍率全部输出融合结果，只有 Tele 原生倍率严格输出原始 Tele。
 
-视频模式平滑 paper delta、occlusion/overlap mask 和 local-affine tone 参数；可选
-current-Wide -> previous-Wide 光流传播，并在场景切换时清空历史状态。
+双向几何必须提供两条光流。在线模型会分别执行 `Wide,Tele` 和 `Tele,Wide` 两次推理；
+使用预计算光流时必须同时提供 `--flow` 和 `--reverse-flow`。旧论文形变轨迹保留为
+`zoom.geometry_mode=paper_delta` 消融项，但它只到受约束 mixed view，不保证收敛到 Tele。
+
+视频模式平滑双向对应场、occlusion/overlap mask 和 local-affine tone 参数；可选
+current-Wide -> previous-Wide 光流传播正向对应场，并在场景切换时清空历史状态。
 
 ## 4. 安装
 
@@ -214,6 +228,14 @@ python demo_zoom.py `
   --config config_zoom.yaml --output outputs/zoom
 ```
 
+使用预计算双向光流：
+
+```powershell
+python demo_zoom.py --wide wide.png --tele tele.png `
+  --flow flow_t2w.npy --reverse-flow flow_w2t.npy `
+  --config config_zoom.yaml --output outputs/zoom
+```
+
 同步双视频：
 
 ```powershell
@@ -278,8 +300,9 @@ difference、temporal warping error、flow consistency、mask temporal differenc
 | mixed -> pure Tele endpoint | 仅 Tele 原生倍率使用原始 Tele，其余倍率保持融合 | 端点前一帧数量、tone 曲线 |
 | 视频时序传播 | EMA；可选 Wide current->previous flow guidance | EMA、scene-cut threshold |
 
-最敏感参数通常依次是：光流模型/权重、输入标定与 overlap、`rho`、flow-gradient 阈值、
-相机相对方位、occlusion rectangle、tone 模式，然后才是 pyramid 层数和 feather width。
+默认双向几何最敏感的因素依次是：正反光流一致性、输入内参与 overlap、遮挡阈值、
+tone 模式，然后才是 pyramid 层数和 feather width。`rho`、flow-gradient 阈值和
+occlusion rectangle 主要影响 `paper_delta` 路径及 paper occlusion 消融。
 
 ## 9. 建议消融
 
@@ -289,6 +312,7 @@ difference、temporal warping error、flow consistency、mask temporal differenc
 - `target_flow.kernel_size`: `100, 300, 600`
 - `boundary.mode`: `simple, flow_aware`
 - `zoom.schedule`: `linear, smoothstep, smootherstep`
+- `zoom.geometry_mode`: `bidirectional_flow, paper_delta`
 - `temporal.enabled`: `true, false`
 - `tone.mode`: `paper_rhe, local_affine_temporal, none`
 - `occlusion.mode`: `paper, fb_consistency`
@@ -303,7 +327,8 @@ difference、temporal warping error、flow consistency、mask temporal differenc
 - `center_crop` 是无标定基线。真正手机变焦应提供 W/T intrinsics 与真实 overlap mask。
 - FlowFormer++ 官方源码已保留上游许可证；模型权重未随项目重新发布。
 - paper occlusion 与 flow-aware distance 是可解释近似，需用真实遮挡 ground truth 校准。
-- 视频模式每帧仍需一对 W/T 光流；开启 flow-guided temporal 会额外增加一条时域 flow。
+- 默认连续变焦每帧需要 W->T 与 T->W 两个对应场；开启 flow-guided temporal 还会增加
+  一条 Wide 时域 flow。双向场不一致时，中间视点可能出现重影或局部拉伸。
 - 中间倍率始终是 mixed 输出；只有精确到达 Tele 原生倍率时才使用原始 Tele，因此自定义
   schedule 若不以 `camera.tele_zoom` 结束，就不会输出纯 Tele 端点。
 - 当前仅实现解析几何与经典融合；预留 learned transition、learned mask、frame interpolation、

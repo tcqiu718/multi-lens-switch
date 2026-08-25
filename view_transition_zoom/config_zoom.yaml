@@ -53,6 +53,7 @@ transform:
   splat_mode: bilinear
   fill_mode: background_nearest
   multi_warp_average: true
+  tele_multi_warp_average: false
   wide_offset_min: -0.5
   wide_offset_max: 0.5
   wide_offset_step: 0.2
@@ -81,6 +82,7 @@ tone:
 blend:
   pyramid_levels: 5
   overlap_soft_width: 100
+  viewpoint_occlusion_strength: 2.0
 
 camera:
   wide_zoom: 1.0
@@ -90,6 +92,7 @@ zoom:
   start: 1.0
   end: 3.0
   frames: 90
+  geometry_mode: bidirectional_flow
   interpolation: log
   schedule: smootherstep
   custom_schedule: null

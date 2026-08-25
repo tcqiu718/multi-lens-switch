@@ -27,11 +27,15 @@ class TemporalStabilizer:
         self.ema = float(ema)
         self.enabled = bool(enabled)
         self.previous_delta = None
+        self.previous_forward_flow = None
+        self.previous_reverse_flow = None
         self.previous_occlusion = None
         self.previous_overlap = None
 
     def reset(self) -> None:
         self.previous_delta = None
+        self.previous_forward_flow = None
+        self.previous_reverse_flow = None
         self.previous_occlusion = None
         self.previous_overlap = None
 
@@ -53,6 +57,21 @@ class TemporalStabilizer:
         self.previous_delta = output.detach()
         return output
 
+    def smooth_correspondence_flows(
+        self,
+        forward: torch.Tensor,
+        reverse: torch.Tensor,
+        propagation_flow: Optional[torch.Tensor] = None,
+    ) -> tuple:
+        """Stabilize the two camera correspondences before virtual-view projection."""
+        smooth_forward = self._smooth(forward, self.previous_forward_flow, propagation_flow)
+        # The available propagation field is in Wide coordinates, so applying
+        # it to the Tele-domain reverse field would use the wrong coordinate map.
+        smooth_reverse = self._smooth(reverse, self.previous_reverse_flow, None)
+        self.previous_forward_flow = smooth_forward.detach()
+        self.previous_reverse_flow = smooth_reverse.detach()
+        return smooth_forward, smooth_reverse
+
     def smooth_masks(
         self,
         occlusion: torch.Tensor,
@@ -67,4 +86,3 @@ class TemporalStabilizer:
 
 
 __all__ = ["TemporalFlowRefiner", "TemporalStabilizer"]
-

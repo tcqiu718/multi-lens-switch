@@ -55,6 +55,8 @@ class MetricsTracker:
             )
             brightness_difference = abs(brightness - float(self.previous_brightness))
         consistency = result.occlusion.consistency_error
+        wide_motion = result.view.wide_motion
+        tele_motion = result.view.tele_motion
         row = {
             "frame": int(frame),
             "zoom": result.zoom_point.zoom,
@@ -71,6 +73,12 @@ class MetricsTracker:
             "crop_y1": result.fov.crop_box[3],
             "mean_flow": float(flow_magnitude(pair.flow_t2w).mean().cpu()),
             "mean_delta": float(flow_magnitude(result.view.delta_flow).mean().cpu()),
+            "mean_wide_motion": 0.0
+            if wide_motion is None
+            else float(flow_magnitude(wide_motion).mean().cpu()),
+            "mean_tele_motion": 0.0
+            if tele_motion is None
+            else float(flow_magnitude(tele_motion).mean().cpu()),
             "occlusion_ratio": float(result.occlusion.hard_mask.mean().cpu()),
             "tele_usage_ratio": result.tele_usage_ratio,
             "brightness": brightness,
