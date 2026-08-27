@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -8,6 +9,7 @@ from torch import nn
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from fusion.occlusion import OcclusionResult
 from fusion.tone_matching import interpolate_affine_tone_pair
 from view_transition.flow_transform import interpolate_transformation
 from zoom.continuous_view import bidirectional_zoom_transition
@@ -114,6 +116,74 @@ class ZoomContinuityTest(unittest.TestCase):
         self.assertTrue(torch.equal(end.result, tele))
         self.assertEqual(start.tele_usage_ratio, 0.0)
         self.assertEqual(end.tele_usage_ratio, 1.0)
+
+    def test_bidirectional_blend_respects_both_camera_validity_masks(self):
+        wide = torch.full((2, 3, 8, 16), 0.2)
+        tele = torch.full_like(wide, 0.8)
+        flow = torch.zeros(2, 2, 8, 16)
+        overlap = torch.ones_like(wide[:, :1])
+        # Columns cover Wide-only, Tele-only, both-valid, and both-invalid.
+        wide_valid = overlap.clone()
+        wide_valid[..., 4:8] = 0.0
+        wide_valid[..., 12:] = 0.0
+        tele_valid = overlap.clone()
+        tele_valid[..., :4] = 0.0
+        tele_valid[..., 12:] = 0.0
+        view = bidirectional_zoom_transition(
+            wide,
+            tele,
+            flow,
+            flow,
+            overlap,
+            alpha=0.8,
+            target_zoom=1.0,
+            wide_zoom=1.0,
+            tele_zoom=1.0,
+            fov_progress=0.8,
+            multi_warp_average=False,
+        )
+        view.wide.image = wide * wide_valid
+        view.wide.valid_mask = wide_valid
+        view.tele.image = tele * tele_valid
+        view.tele.valid_mask = tele_valid
+        occlusion = OcclusionResult(torch.zeros_like(overlap), overlap * 0.25)
+
+        for mask_smoothing in (False, True):
+            for levels in (1, 3):
+                with self.subTest(mask_smoothing=mask_smoothing, levels=levels):
+                    config = {
+                        "target_flow": {"kernel_size": 5},
+                        "boundary": {"mode": "simple"},
+                        "transform": {"multi_warp_average": False},
+                        "tone": {"mode": "none"},
+                        "blend": {
+                            "pyramid_levels": levels,
+                            "overlap_soft_width": 0,
+                            "viewpoint_occlusion_strength": 0.5,
+                        },
+                        "camera": {"wide_zoom": 1.0, "tele_zoom": 3.0},
+                        "zoom": {"interpolation": "linear", "schedule": "linear"},
+                        "temporal": {"enabled": True, "mask_smoothing": mask_smoothing},
+                    }
+                    pipeline = ContinuousZoomPipeline(config, torch.device("cpu"))
+                    pair = pipeline.prepare_pair(wide, tele, flow, flow)
+                    pipeline.temporal.previous_occlusion = overlap * 0.9
+                    pipeline.temporal.previous_overlap = overlap.clone()
+                    with patch.object(pipeline, "_bidirectional_view", return_value=view), \
+                            patch.object(pipeline, "_occlusion", return_value=occlusion):
+                        result = pipeline.render(pair, 2.6)
+
+                    mask = result.fusion.occlusion_mask
+                    alpha = result.zoom_point.alpha
+                    expected = (1.0 - alpha) + 0.5 * alpha * (1.0 - alpha) * result.occlusion.soft_mask
+                    self.assertTrue(torch.equal(mask[..., :4], torch.ones_like(mask[..., :4])))
+                    self.assertTrue(torch.equal(mask[..., 4:8], torch.zeros_like(mask[..., 4:8])))
+                    self.assertTrue(torch.allclose(mask[..., 8:], expected[..., 8:]))
+                    self.assertTrue(torch.isfinite(result.result).all())
+                    if levels == 1:
+                        self.assertTrue(torch.equal(result.result[..., :4], wide[..., :4]))
+                        self.assertTrue(torch.equal(result.result[..., 4:8], tele[..., 4:8]))
+                        self.assertEqual(float(result.result[..., 12:].abs().max()), 0.0)
 
     def test_bidirectional_view_aligns_correspondences_at_every_progress(self):
         wide = torch.zeros(1, 1, 9, 24)

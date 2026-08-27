@@ -360,8 +360,15 @@ class ContinuousZoomPipeline:
             blend_mask = (
                 (1.0 - point.alpha) + occlusion_strength * endpoint_weight * smooth_occ
             ).clamp(0.0, 1.0)
-            tele_hole_fallback = (1.0 - view.tele.valid_mask) * view.wide.valid_mask
-            blend_mask = torch.maximum(blend_mask, tele_hole_fallback)
+            wide_valid = view.wide.valid_mask > 0.5
+            tele_valid = view.tele.valid_mask > 0.5
+            # Override smoothed weights only where a single camera is valid.
+            blend_mask = torch.where(
+                wide_valid & ~tele_valid, torch.ones_like(blend_mask), blend_mask
+            )
+            blend_mask = torch.where(
+                ~wide_valid & tele_valid, torch.zeros_like(blend_mask), blend_mask
+            )
         occlusion = OcclusionResult(occlusion.hard_mask, smooth_occ, occlusion.consistency_error)
         calibration = pair.tone_calibration
         if calibration.gain is not None and calibration.bias is not None:
